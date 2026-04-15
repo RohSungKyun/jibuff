@@ -1,0 +1,16 @@
+{
+  "$schema": "jibuff/storage/state.schema.json",
+  "version": "0.1.0",
+  "loop": {
+    "status": "idle",
+    "mode": null,
+    "current_task_id": null,
+    "iteration": 0,
+    "started_at": null,
+    "updated_at": null
+  },
+  "spec": {
+    "seed_path": null,
+    "locked": false
+  }
+}

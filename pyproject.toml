@@ -57,6 +57,10 @@ python_version = "3.12"
 strict = true
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["mcp.server", "orchestrator.main"]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import asyncio
 from typing import Annotated
 
 import typer
@@ -34,3 +37,14 @@ def status() -> None:
     """Show current loop state."""
     typer.echo("[jibuff status]")
     typer.echo("(not yet implemented — Phase 2)")
+
+
+mcp_app = typer.Typer(help="MCP server commands")
+app.add_typer(mcp_app, name="mcp")
+
+
+@mcp_app.command("serve")
+def mcp_serve() -> None:
+    """Start the jibuff MCP stdio server."""
+    from mcp.server import serve as jibuff_serve  # type: ignore[import]
+    asyncio.run(jibuff_serve())

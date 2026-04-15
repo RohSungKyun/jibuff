@@ -43,21 +43,34 @@ Request → [Interview] → [Spec Lock] → [Agent Loop] → [Validation] → Ar
 
 ## Installation
 
+**One-liner:**
+
 ```bash
-# Core
-pip install jibuff
+curl -fsSL https://raw.githubusercontent.com/RohSungKyun/jibuff/main/scripts/install.sh | bash
+```
 
-# With MCP server support
-pip install "jibuff[mcp]"
+With extras:
 
-# With RTC validators (Playwright)
-pip install "jibuff[rtc]"
+```bash
+# RTC validators + MCP server
+curl -fsSL https://raw.githubusercontent.com/RohSungKyun/jibuff/main/scripts/install.sh | bash -s -- --extras rtc,mcp
 
 # Everything
-pip install "jibuff[all]"
+curl -fsSL https://raw.githubusercontent.com/RohSungKyun/jibuff/main/scripts/install.sh | bash -s -- --extras all
+```
+
+**pip:**
+
+```bash
+pip install jibuff                # core
+pip install "jibuff[mcp]"         # + MCP server
+pip install "jibuff[rtc]"         # + RTC validators (Playwright)
+pip install "jibuff[all]"         # everything
 ```
 
 Requires Python ≥ 3.12 and a working `claude` CLI (`npm install -g @anthropic-ai/claude-code`).
+
+Both `jibuff` and the short alias `jb` are available after installation.
 
 ---
 
@@ -67,13 +80,16 @@ Requires Python ≥ 3.12 and a working `claude` CLI (`npm install -g @anthropic-
 
 ```bash
 # Clarify a request interactively
-jibuff interview "Add WebRTC screen sharing to the dashboard"
+jb interview "Add WebRTC screen sharing to the dashboard"
 
 # Run the loop for a given request
-jibuff run "Add WebRTC screen sharing to the dashboard" --mode rtc
+jb run "Add WebRTC screen sharing to the dashboard" --mode rtc
 
 # Check current loop state
-jibuff status
+jb status
+
+# (jibuff is also available as a full-name alias)
+jibuff --help
 ```
 
 ### MCP server

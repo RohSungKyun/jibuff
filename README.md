@@ -225,21 +225,6 @@ Test coverage is enforced at 80% minimum (currently ~90%).
 
 ---
 
-## Project status
-
-| Phase | Description | Status |
-|---|---|---|
-| 0 | Foundation (config, CLI scaffold, spec docs) | Done |
-| 1 | Interview Layer (ambiguity scoring, risk indexer, engine) | Done |
-| 2 | Execution Layer (TaskQueue, AgentRunner, LoopController) | Done |
-| 3 | Validation Layer (lint, types, tests, security) | Done |
-| 4 | Memory/Artifact Layer (ArtifactStore, context hygiene) | Done |
-| 5 | RTC Validators (device, network, fallback, firewall) | Done |
-| 6 | MCP Server (4 tools, stdio transport) | Done |
-| 7 | Phaser Mode (game-focused validator stack) | Planned |
-
----
-
 ## License
 
 MIT

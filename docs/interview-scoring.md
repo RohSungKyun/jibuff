@@ -1,0 +1,177 @@
+# Interview Scoring Design
+
+## Overview
+
+jibuff uses a **3-stage hybrid ambiguity scorer** that balances cost, speed, and semantic depth. Stages run sequentially — later stages only activate when earlier ones pass.
+
+Alongside ambiguity scoring, the **RiskIndexer** runs at Stage 3 to produce a separate risk level gate.
+
+---
+
+## Ambiguity Score
+
+The ambiguity score is a float in **[0.0, 1.0]**.
+
+- `0.0` = perfectly clear, no ambiguity
+- `1.0` = completely ambiguous, nothing is defined
+
+The interview continues until the score drops to or below the mode threshold:
+
+| Mode | Threshold |
+|------|-----------|
+| quick | <= 0.25 |
+| rtc | <= 0.15 |
+
+---
+
+## Stage 1 — Keyword Coverage (free, instant)
+
+Checks whether mandatory topic areas have been mentioned at all. No LLM call required.
+
+**Mandatory dimensions:**
+
+| Dimension | Example keywords |
+|-----------|-----------------|
+| User type | user, client, admin, role, persona |
+| Failure conditions | error, fail, timeout, retry, fallback |
+| Environment | deploy, platform, OS, browser, server |
+| Success criteria | complete, done, pass, threshold, metric |
+| Constraints | must not, forbidden, limit, budget, deadline |
+
+**Scoring:**
+```
+coverage = matched_dimensions / total_dimensions
+stage1_score = 1 - coverage
+```
+
+If `stage1_score > 0.6`: immediately ask follow-up questions targeting uncovered dimensions. Do not advance to Stage 2.
+
+---
+
+## Stage 2 — Contradiction Detection (cheap LLM call)
+
+Scans the collected answers for internal conflicts.
+
+**Examples of contradictions:**
+- "must work offline" + "requires real-time server sync"
+- "support all browsers" + "uses Web Bluetooth API"
+- "no authentication needed" + "contains user PII"
+
+**Prompt approach:** low-temperature (0.1), single-pass scan, return structured list of conflicts.
+
+If any HIGH-confidence contradiction is found: surface it to the user and request clarification before proceeding.
+
+---
+
+## Stage 3 — Dimensional Clarity Scoring (LLM)
+
+Five dimensions are scored independently, then combined into a final ambiguity score.
+
+**Dimensions and weights:**
+
+| Dimension | Weight (quick) | Weight (rtc) | Core question |
+|-----------|:--------------:|:------------:|---------------|
+| Goal clarity | 30% | 25% | Is the goal specific and bounded? |
+| Constraint clarity | 20% | 20% | Are limitations and non-goals defined? |
+| Risk exposure | 20% | 25% | Are failure modes and edge cases identified? |
+| Environment clarity | 15% | 15% | Is the deployment/runtime context clear? |
+| Success criteria | 15% | 15% | Are completion conditions measurable? |
+
+**Scoring formula:**
+```
+clarity_i = LLM_score(dimension_i)   # float in [0, 1], temperature=0.0
+weighted_clarity = sum(clarity_i * weight_i)
+ambiguity = 1 - weighted_clarity
+```
+
+**Example (rtc mode):**
+```
+Goal:        0.9 * 0.25 = 0.225
+Constraint:  0.8 * 0.20 = 0.160
+Risk:        0.6 * 0.25 = 0.150   ← weak point
+Environment: 0.9 * 0.15 = 0.135
+Success:     0.8 * 0.15 = 0.120
+                         -------
+Weighted clarity        = 0.790
+Ambiguity               = 0.210   > 0.15 threshold → continue interview
+```
+
+---
+
+## Risk Index
+
+The RiskIndexer runs in parallel with Stage 3 and produces a **risk level integer (1–5)** with a justification string.
+
+**Risk dimensions:**
+
+| Dimension | Weight | What it measures |
+|-----------|:------:|-----------------|
+| Security exposure | 30% | Auth, PII, injection surface, privilege scope |
+| Network dependency | 30% | Real-time sync, WebSocket, API reliance, offline handling |
+| State complexity | 20% | Shared mutable state, race conditions, session management |
+| External API surface | 20% | Third-party services, rate limits, version stability |
+
+**Level mapping:**
+```
+score in [0.0, 0.2)  → Level 1 (Minimal)
+score in [0.2, 0.4)  → Level 2 (Low)
+score in [0.4, 0.6)  → Level 3 (Moderate)
+score in [0.6, 0.8)  → Level 4 (High)
+score in [0.8, 1.0]  → Level 5 (Critical)
+```
+
+**Mode gate:**
+
+| Mode | Risk gate |
+|------|-----------|
+| quick | no gate (informational only) |
+| rtc | must be Level 1–2 (< 0.4) to proceed without extended interview |
+| rtc (Level 3+) | extended interview required, risk dimensions probed specifically |
+
+---
+
+## Interview Flow
+
+```
+[User input]
+     ↓
+Stage 1: keyword coverage check
+     ↓ (coverage < 0.6 threshold)
+Ask targeted follow-up questions
+     ↓ (coverage >= 0.6)
+Stage 2: contradiction scan
+     ↓ (no contradictions)
+Stage 3: dimensional scoring + RiskIndexer
+     ↓
+ambiguity <= threshold AND risk < gate?
+     ↓ YES
+Generate seed.yaml (lock spec)
+     ↓ NO
+Generate targeted follow-up questions
+(weight questions toward lowest-clarity dimensions)
+     ↓
+Loop back to Stage 1
+```
+
+**Max interview rounds:** 15 (rtc), 5 (quick)
+
+If max rounds reached without convergence: surface remaining ambiguities as open issues in `open_issues.json` and require explicit user override to proceed.
+
+---
+
+## Question Generation Strategy
+
+Questions are generated by the `InterviewEngine` with the following priorities:
+
+1. **Cover uncovered mandatory dimensions first** (Stage 1 gaps)
+2. **Resolve contradictions** (Stage 2 conflicts)
+3. **Probe lowest-scoring dimensions** (Stage 3 weights guide question targeting)
+4. **Surface risk-specific questions** for high-risk dimensions (RiskIndexer)
+
+For rtc mode, additional question pools are activated:
+
+- Device/browser targets
+- Network condition assumptions (offline, high-latency, packet loss)
+- Fallback behavior requirements
+- Firewall/proxy deployment constraints
+- Real-time sync requirements and acceptable staleness

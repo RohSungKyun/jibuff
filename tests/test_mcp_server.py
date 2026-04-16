@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from mcp.server import (
     TOOLS,
@@ -48,24 +49,46 @@ def test_interview_unknown_mode() -> None:
     assert "Error" in result
 
 
+def _mock_engine(questions: list[str], complete: bool = False) -> MagicMock:
+    """Return a mock InterviewEngine that yields the given questions."""
+    session = MagicMock()
+    session.complete = complete
+    session.rounds = 1
+    session.last_ambiguity = MagicMock(score=0.1)
+    session.transcript = []
+
+    engine = MagicMock()
+    engine.start.return_value = session
+    engine.step = AsyncMock(return_value=questions)
+    engine.generate_tasks_md.return_value = "- [ ] P0-01: scaffold"
+    return engine
+
+
 def test_interview_quick_mode() -> None:
-    result = handle_interview({"request": "build a task CLI", "mode": "quick"})
+    engine = _mock_engine(["What is the target user?"])
+    with patch("interview.engine.InterviewEngine", return_value=engine):
+        result = handle_interview({"request": "build a task CLI", "mode": "quick"})
     assert "quick" in result
     assert "0.25" in result  # threshold
 
 
 def test_interview_rtc_mode() -> None:
-    result = handle_interview({"request": "build WebRTC app", "mode": "rtc"})
+    engine = _mock_engine(["Latency budget?"])
+    with patch("interview.engine.InterviewEngine", return_value=engine):
+        result = handle_interview({"request": "build WebRTC app", "mode": "rtc"})
     assert "rtc" in result
     assert "0.15" in result
 
 
 def test_interview_with_answer() -> None:
-    result = handle_interview({
-        "request": "build something",
-        "answer": "admin users only",
-    })
-    assert "admin users only" in result
+    engine = _mock_engine(["Next question?"])
+    with patch("interview.engine.InterviewEngine", return_value=engine):
+        result = handle_interview({
+            "request": "build something",
+            "answer": "admin users only",
+        })
+    # answer is recorded in transcript; result should show a question round
+    assert "question" in result.lower() or "round" in result.lower()
 
 
 # ---------------------------------------------------------------------------

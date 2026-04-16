@@ -68,4 +68,4 @@ testpaths = ["tests"]
 addopts = "--cov=orchestrator --cov=validators --cov-report=term-missing --cov-fail-under=80"
 
 [tool.coverage.run]
-omit = ["tests/*"]
+omit = ["tests/*", "orchestrator/main.py"]

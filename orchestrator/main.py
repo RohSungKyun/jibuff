@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Annotated
 
 import typer
+
+from orchestrator.config import get_mode
 
 app = typer.Typer(
     name="jibuff",
@@ -12,31 +15,190 @@ app = typer.Typer(
 )
 
 
-@app.command()
-def run(
-    request: Annotated[str, typer.Argument(help="What you want to build")],
-    mode: Annotated[str, typer.Option(help="Workflow mode: quick | rtc")] = "quick",
-) -> None:
-    """Run the jibuff workflow for a given request."""
-    typer.echo(f"[jibuff] mode={mode} | {request}")
-    typer.echo("(not yet implemented — Phase 2)")
+def _build_validators(mode: str, workspace: Path) -> list:  # type: ignore[type-arg]
+    from validators.lint import LintValidator
+    from validators.security import SecurityValidator
+    from validators.tests import PytestValidator
+    from validators.types import TypeValidator
+
+    stack = [LintValidator(), TypeValidator(), PytestValidator(), SecurityValidator()]
+
+    if mode == "rtc":
+        from validators.device import DeviceValidator
+        from validators.fallback import FallbackValidator
+        from validators.firewall import FirewallValidator
+        from validators.network import NetworkValidator
+
+        stack += [DeviceValidator(), NetworkValidator(), FallbackValidator(), FirewallValidator()]
+
+    return stack
 
 
 @app.command()
 def interview(
     request: Annotated[str, typer.Argument(help="Your initial idea or feature request")],
     mode: Annotated[str, typer.Option(help="Workflow mode: quick | rtc")] = "quick",
+    workspace: Annotated[str, typer.Option(help="Workspace directory (default: cwd)")] = "",
 ) -> None:
-    """Start an interview session to clarify requirements."""
-    typer.echo(f"[jibuff interview] mode={mode} | {request}")
-    typer.echo("(not yet implemented — Phase 1)")
+    """Clarify requirements through structured dialogue, then generate spec/tasks.md."""
+    try:
+        get_mode(mode)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+    ws = Path(workspace) if workspace else Path.cwd()
+
+    from interview.engine import InterviewEngine
+
+    engine = InterviewEngine(mode=mode)
+    session = engine.start(request)
+
+    typer.echo(f"[jibuff interview] mode={mode}")
+    typer.echo(f"Request: {request}")
+    typer.echo("")
+
+    questions = asyncio.run(engine.step(session))
+
+    while questions:
+        for q in questions:
+            typer.echo(f"  {q}")
+        typer.echo("")
+
+        answer = typer.prompt("Your answer")
+        typer.echo("")
+        questions = asyncio.run(engine.step(session, user_answer=answer))
+
+    # Session complete
+    ambiguity = session.last_ambiguity
+    risk = session.last_risk
+
+    typer.echo("[jibuff] Interview complete.")
+    if ambiguity:
+        typer.echo(f"  Ambiguity score : {ambiguity.score:.2f} (threshold {ambiguity.threshold})")
+    if risk:
+        typer.echo(f"  Risk score      : {risk.score:.2f} (level {risk.level})")
+    if session.rounds >= session.mode.max_interview_rounds:
+        max_r = session.mode.max_interview_rounds
+        typer.echo(f"  (max rounds {max_r} reached — proceeding with open items)")
+    typer.echo("")
+
+    # Generate tasks.md
+    typer.echo("[jibuff] Generating spec/tasks.md ...")
+    tasks_md = engine.generate_tasks_md(session)
+
+    spec_dir = ws / "spec"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    tasks_file = spec_dir / "tasks.md"
+    tasks_file.write_text(tasks_md + "\n", encoding="utf-8")
+
+    typer.echo(f"[jibuff] spec/tasks.md written ({tasks_file})")
+    typer.echo("")
+    typer.echo("Next: run 'jb run' to start the agent loop.")
 
 
 @app.command()
-def status() -> None:
+def run(
+    mode: Annotated[str, typer.Option(help="Workflow mode: quick | rtc")] = "quick",
+    workspace: Annotated[str, typer.Option(help="Workspace directory (default: cwd)")] = "",
+    max_iterations: Annotated[int, typer.Option(help="Max loop iterations")] = 30,
+    no_commit: Annotated[bool, typer.Option("--no-commit", help="Skip auto git commit")] = False,
+) -> None:
+    """Run the agent loop against spec/tasks.md until all tasks are done."""
+    try:
+        get_mode(mode)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+    ws = Path(workspace) if workspace else Path.cwd()
+    tasks_file = ws / "spec" / "tasks.md"
+    storage_dir = ws / "storage"
+
+    if not tasks_file.exists():
+        typer.echo(
+            f"Error: spec/tasks.md not found at {tasks_file}\n"
+            "Run 'jb interview' first to generate it.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    status_file = storage_dir / "task_status.json"
+
+    from orchestrator.agent_runner import AgentRunner
+    from orchestrator.loop_controller import LoopController
+    from orchestrator.task_queue import TaskQueue
+
+    queue = TaskQueue(tasks_file=tasks_file, status_file=status_file)
+    summary = queue.summary()
+    typer.echo(
+        f"[jibuff run] mode={mode} | "
+        f"todo={summary['todo']} done={summary['done']} "
+        f"blocked={summary['blocked']}"
+    )
+    typer.echo(f"workspace: {ws}")
+    typer.echo("")
+
+    if queue.all_done():
+        typer.echo("[jibuff] All tasks already complete.")
+        return
+
+    runner = AgentRunner(workspace=ws)
+    validators = _build_validators(mode, ws)
+    controller = LoopController(
+        queue=queue,
+        runner=runner,
+        validators=validators,
+        storage_dir=storage_dir,
+        workspace=ws,
+        max_iterations=max_iterations,
+        auto_commit=not no_commit,
+    )
+
+    result = controller.run()
+
+    typer.echo("")
+    typer.echo(f"[jibuff] Loop finished — {result.stopped_reason}")
+    typer.echo(f"  completed : {len(result.completed_tasks)}")
+    typer.echo(f"  failed    : {len(result.failed_tasks)}")
+    typer.echo(f"  iterations: {result.total_iterations}")
+
+    if result.stopped_reason == "agent_unavailable":
+        typer.echo(
+            "\nError: claude CLI not found. Install: npm install -g @anthropic-ai/claude-code",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+
+@app.command()
+def status(
+    workspace: Annotated[str, typer.Option(help="Workspace directory (default: cwd)")] = "",
+) -> None:
     """Show current loop state."""
+    ws = Path(workspace) if workspace else Path.cwd()
+    tasks_file = ws / "spec" / "tasks.md"
+    status_file = ws / "storage" / "task_status.json"
+
+    if not tasks_file.exists():
+        typer.echo("[jibuff status] No spec/tasks.md found. Run 'jb interview' first.")
+        return
+
+    from orchestrator.task_queue import TaskQueue
+
+    queue = TaskQueue(tasks_file=tasks_file, status_file=status_file)
+    summary = queue.summary()
+
     typer.echo("[jibuff status]")
-    typer.echo("(not yet implemented — Phase 2)")
+    typer.echo(
+        f"  done={summary['done']} | todo={summary['todo']} | "
+        f"in_progress={summary['in_progress']} | blocked={summary['blocked']}"
+    )
+
+    last_failure = ws / "storage" / "last_failure.md"
+    if last_failure.exists():
+        typer.echo("  last failure: present")
 
 
 mcp_app = typer.Typer(help="MCP server commands")

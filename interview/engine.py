@@ -80,6 +80,20 @@ Respond ONLY with valid JSON matching this exact schema:
 }}
 """
 
+_TASK_GEN_PROMPT = """\
+Based on the clarified requirements below, generate an atomic task list in Markdown format.
+
+Requirements:
+<requirements>{requirements}</requirements>
+
+Rules:
+- Each task must be independently completable by an AI coding agent in one session.
+- Use this exact format per line: - [ ] P{{phase}}-{{nn}}: {{description}}
+- Phase groups: P0 (setup), P1 (core logic), P2 (features/API), P3 (tests & validation)
+- Maximum 20 tasks total. Descriptions must be specific and actionable.
+- Output ONLY the task list, no headings or preamble.
+"""
+
 _RISK_PROMPT = """\
 Score the technical risk of these software requirements across 4 dimensions.
 Each score is a float from 0.0 (no risk) to 1.0 (critical risk).
@@ -252,6 +266,11 @@ class InterviewEngine:
             return DimensionalScore(
                 goal=0.0, constraint=0.0, risk=0.0, environment=0.0, success=0.0
             )
+
+    def generate_tasks_md(self, session: InterviewSession) -> str:
+        """Generate a spec/tasks.md from the completed interview session."""
+        prompt = _TASK_GEN_PROMPT.format(requirements=session.full_text())
+        return self._call(prompt)
 
     async def _score_risk(self, text: str) -> RiskResult:
         prompt = _RISK_PROMPT.format(requirements=text)

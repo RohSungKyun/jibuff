@@ -133,7 +133,12 @@ TOOLS: list[dict[str, object]] = [
 
 
 def handle_interview(args: dict[str, object]) -> str:
-    """Stub — full implementation wires into InterviewEngine (Phase 1)."""
+    """Run one interview step via InterviewEngine.
+
+    Pass 'answer' to continue an in-progress session (session state is not
+    persisted between MCP calls — each call is stateless; use the CLI for
+    multi-round interactive sessions).
+    """
     request = str(args.get("request", ""))
     mode = str(args.get("mode", "quick"))
     answer = args.get("answer")
@@ -146,18 +151,42 @@ def handle_interview(args: dict[str, object]) -> str:
     if not request:
         return "Error: 'request' is required."
 
-    lines = [
-        f"[jibuff interview] mode={mode} | threshold={cfg.ambiguity_threshold}",
-        f"Request: {request}",
-    ]
-    if answer:
-        lines.append(f"Answer received: {answer}")
-    lines.append("(InterviewEngine integration — Phase 1 wiring pending)")
-    return "\n".join(lines)
+    try:
+        import asyncio
+
+        from interview.engine import InterviewEngine
+
+        engine = InterviewEngine(mode=mode)
+        session = engine.start(request)
+
+        if answer:
+            session.transcript.append({"role": "user", "content": str(answer)})
+
+        questions = asyncio.run(engine.step(session, user_answer=None))
+
+        if session.complete:
+            tasks_md = engine.generate_tasks_md(session)
+            return (
+                f"[jibuff interview] mode={mode} | threshold={cfg.ambiguity_threshold}\n"
+                f"Interview complete. Ambiguity score: "
+                f"{session.last_ambiguity.score:.2f if session.last_ambiguity else 'n/a'}\n\n"
+                f"Generated tasks:\n{tasks_md}"
+            )
+
+        lines = [
+            f"[jibuff interview] mode={mode} | threshold={cfg.ambiguity_threshold}",
+            f"Round {session.rounds} — clarifying questions:",
+            "",
+        ]
+        lines.extend(f"  {q}" for q in questions)
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"Error running interview: {e}"
 
 
 def handle_run(args: dict[str, object], cwd: Path) -> str:
-    """Stub — full implementation wires into LoopController (Phase 2)."""
+    """Execute the LoopController for the given workspace."""
     mode = str(args.get("mode", "quick"))
     workspace = Path(str(args["workspace"])) if "workspace" in args else cwd
     dry_run = bool(args.get("dry_run", False))
@@ -180,11 +209,50 @@ def handle_run(args: dict[str, object], cwd: Path) -> str:
             "Setup OK — ready to execute."
         )
 
-    return (
-        f"[jibuff run] mode={mode}\n"
-        f"workspace: {workspace}\n"
-        "(LoopController integration — Phase 2 wiring pending)"
-    )
+    try:
+        from orchestrator.agent_runner import AgentRunner
+        from orchestrator.loop_controller import LoopController
+        from orchestrator.task_queue import TaskQueue
+        from validators.lint import LintValidator
+        from validators.security import SecurityValidator
+        from validators.tests import PytestValidator
+        from validators.types import TypeValidator
+
+        storage_dir = workspace / "storage"
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        status_file = storage_dir / "task_status.json"
+
+        queue = TaskQueue(tasks_file=tasks_file, status_file=status_file)
+        runner = AgentRunner(workspace=workspace)
+        validators = [LintValidator(), TypeValidator(), PytestValidator(), SecurityValidator()]
+
+        if mode == "rtc":
+            from validators.device import DeviceValidator
+            from validators.fallback import FallbackValidator
+            from validators.firewall import FirewallValidator
+            from validators.network import NetworkValidator
+            validators += [
+                DeviceValidator(), NetworkValidator(), FallbackValidator(), FirewallValidator()
+            ]
+
+        controller = LoopController(
+            queue=queue,
+            runner=runner,
+            validators=validators,
+            storage_dir=storage_dir,
+            workspace=workspace,
+        )
+        result = controller.run()
+
+        return (
+            f"[jibuff run] mode={mode} | {result.stopped_reason}\n"
+            f"completed : {len(result.completed_tasks)}\n"
+            f"failed    : {len(result.failed_tasks)}\n"
+            f"iterations: {result.total_iterations}"
+        )
+
+    except Exception as e:
+        return f"Error running loop: {e}"
 
 
 def handle_status(args: dict[str, object], cwd: Path) -> str:

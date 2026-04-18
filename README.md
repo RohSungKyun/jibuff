@@ -79,11 +79,14 @@ Both `jibuff` and the short alias `jb` are available after installation.
 ### CLI
 
 ```bash
-# Clarify a request interactively
+# Step 1: clarify requirements → generates spec/tasks.md
 jb interview "Add WebRTC screen sharing to the dashboard"
+jb interview "Add WebRTC screen sharing" --mode rtc   # RTC mode
 
-# Run the loop for a given request
-jb run "Add WebRTC screen sharing to the dashboard" --mode rtc
+# Step 2: run the agent loop against spec/tasks.md
+jb run
+jb run --mode rtc
+jb run --no-commit          # skip auto git commit per task
 
 # Check current loop state
 jb status

@@ -215,7 +215,7 @@ class TestFirewallValidator:
 
         def fake_run(*args: object, **kwargs: object) -> MagicMock:
             env = kwargs.get("env", {})
-            captured_envs.append(dict(env))  # type: ignore[arg-type]
+            captured_envs.append(dict(env))  # type: ignore[call-overload]
             return _mock_run(0)
 
         scenarios = [FirewallScenario(

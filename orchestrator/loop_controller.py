@@ -1,16 +1,22 @@
-"""LoopController — drives the run → validate → pass/fail cycle."""
+"""LoopController — drives the run → validate → ralph → pass/fail cycle."""
 
 from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Protocol
 
 from reporters.failure_report import write_failure_report
 from reporters.progress import write_progress
 
 from .agent_runner import AgentRunner
 from .task_queue import Task, TaskQueue
+
+
+class QualityEvaluatorProtocol(Protocol):
+    def evaluate(self, task: Task, agent_output: str, workspace: Path) -> Any:
+        ...
 
 
 @dataclass
@@ -30,10 +36,13 @@ class LoopController:
     workspace: Path
     max_iterations: int = 30
     auto_commit: bool = True
+    quality_evaluator: QualityEvaluatorProtocol | None = None
+    max_quality_retries: int = 2
 
     def run(self) -> LoopResult:
         result = LoopResult()
         failure_context: str | None = None
+        quality_retries: dict[str, int] = {}
 
         while not self.queue.all_done():
             if result.total_iterations >= self.max_iterations:
@@ -53,7 +62,6 @@ class LoopController:
             run = self.runner.run(task, failure_context=failure_context)
 
             if not run.success:
-                # Agent itself failed (timeout, not found, non-zero exit)
                 if run.returncode == -1 and "not found" in run.stderr:
                     result.stopped_reason = "agent_unavailable"
                     self.queue.requeue(task.id)
@@ -81,8 +89,26 @@ class LoopController:
                 write_progress(self.queue, self.storage_dir)
                 continue
 
+            # Ralph cycle — quality gate (only when evaluator is set)
+            if self.quality_evaluator is not None:
+                retries = quality_retries.get(task.id, 0)
+                if retries < self.max_quality_retries:
+                    quality = self.quality_evaluator.evaluate(
+                        task=task,
+                        agent_output=run.stdout,
+                        workspace=self.workspace,
+                    )
+                    if not quality.passed:
+                        quality_retries[task.id] = retries + 1
+                        failure_context = quality.context()
+                        result.failed_tasks.append(task.id)
+                        self.queue.requeue(task.id)
+                        write_progress(self.queue, self.storage_dir)
+                        continue
+
             # Pass
             failure_context = None
+            quality_retries.pop(task.id, None)
             self.queue.mark_done(task.id)
             result.completed_tasks.append(task.id)
             write_progress(self.queue, self.storage_dir)

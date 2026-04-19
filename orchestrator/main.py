@@ -146,6 +146,13 @@ def run(
 
     runner = AgentRunner(workspace=ws)
     validators = _build_validators(mode, ws)
+
+    quality_evaluator = None
+    cfg = get_mode(mode)
+    if cfg.quality_threshold is not None:
+        from evaluators.quality import QualityEvaluator
+        quality_evaluator = QualityEvaluator(threshold=cfg.quality_threshold)
+
     controller = LoopController(
         queue=queue,
         runner=runner,
@@ -154,6 +161,8 @@ def run(
         workspace=ws,
         max_iterations=max_iterations,
         auto_commit=not no_commit,
+        quality_evaluator=quality_evaluator,
+        max_quality_retries=cfg.max_quality_retries,
     )
 
     result = controller.run()

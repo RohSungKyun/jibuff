@@ -9,6 +9,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import typer
+
 from orchestrator.task_queue import Task
 
 
@@ -80,13 +82,14 @@ def prompt_escalation(
 
     Returns the issue URL if created, None otherwise.
     """
-    print(f"\n[jibuff] Task {task.id} has failed {failure_count} times consecutively.")
-    print(f"  Task: {task.description}")
+    typer.echo(f"\n[jibuff] Task {task.id} has failed {failure_count} times consecutively.")
+    typer.echo(f"  Task: {task.description}")
     for gate, error in last_errors.items():
-        print(f"  [{gate}] {error.strip()[:100]}")
+        typer.echo(f"  [{gate}] {error.strip()[:100]}")
 
     try:
-        answer = input("\nCreate a GitHub issue for this failure? [y/N] ").strip().lower()
+        answer = typer.prompt("\nCreate a GitHub issue for this failure? [y/N]", default="n")
+        answer = answer.strip().lower()
     except (EOFError, KeyboardInterrupt):
         return None
 
@@ -95,9 +98,9 @@ def prompt_escalation(
             task, failure_count, last_errors, workspace, labels=["jibuff", "bug"]
         )
         if url:
-            print(f"[jibuff] Issue created: {url}")
+            typer.echo(f"[jibuff] Issue created: {url}")
         else:
-            print("[jibuff] Failed to create issue (is `gh` CLI installed and authenticated?)")
+            typer.echo("[jibuff] Failed to create issue (is `gh` CLI installed and authenticated?)")
         return url
 
     return None

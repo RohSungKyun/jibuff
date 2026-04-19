@@ -153,6 +153,8 @@ def run(
         from evaluators.quality import QualityEvaluator
         quality_evaluator = QualityEvaluator(threshold=cfg.quality_threshold)
 
+    from reporters.escalation import prompt_escalation
+
     controller = LoopController(
         queue=queue,
         runner=runner,
@@ -163,6 +165,8 @@ def run(
         auto_commit=not no_commit,
         quality_evaluator=quality_evaluator,
         max_quality_retries=cfg.max_quality_retries,
+        escalation_handler=prompt_escalation,
+        escalation_threshold=3,
     )
 
     result = controller.run()
@@ -172,6 +176,10 @@ def run(
     typer.echo(f"  completed : {len(result.completed_tasks)}")
     typer.echo(f"  failed    : {len(result.failed_tasks)}")
     typer.echo(f"  iterations: {result.total_iterations}")
+    if result.escalated_issues:
+        typer.echo(f"  escalated : {len(result.escalated_issues)} issues created")
+        for url in result.escalated_issues:
+            typer.echo(f"    {url}")
 
     if result.stopped_reason == "agent_unavailable":
         typer.echo(

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from mcp.server import (
+from jibuff_mcp.server import (
     TOOLS,
     handle_cancel,
     handle_interview,

@@ -326,5 +326,5 @@ app.add_typer(mcp_app, name="mcp")
 @mcp_app.command("serve")
 def mcp_serve() -> None:
     """Start the jibuff MCP stdio server."""
-    from mcp.server import serve as jibuff_serve  # type: ignore[import]
+    from jibuff_mcp.server import serve as jibuff_serve  # type: ignore[import]
     asyncio.run(jibuff_serve())

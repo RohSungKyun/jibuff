@@ -169,7 +169,7 @@ def handle_interview(args: dict[str, object]) -> str:
             return (
                 f"[jibuff interview] mode={mode} | threshold={cfg.ambiguity_threshold}\n"
                 f"Interview complete. Ambiguity score: "
-                f"{session.last_ambiguity.score:.2f if session.last_ambiguity else 'n/a'}\n\n"
+                f"{session.last_ambiguity.score:.2f if session.last_ambiguity is not None else 'n/a'}\n\n"
                 f"Generated tasks:\n{tasks_md}"
             )
 
@@ -238,7 +238,7 @@ def handle_run(args: dict[str, object], cwd: Path) -> str:
         controller = LoopController(
             queue=queue,
             runner=runner,
-            validators=validators,
+            validators=validators,  # type: ignore[arg-type]
             storage_dir=storage_dir,
             workspace=workspace,
         )
@@ -323,11 +323,11 @@ def create_server() -> object:
     server = Server("jibuff")
     cwd = Path.cwd()
 
-    @server.list_tools()  # type: ignore[misc]
+    @server.list_tools()  # type: ignore[untyped-decorator]
     async def list_tools() -> list[Tool]:
         return [Tool(**t) for t in TOOLS]  # type: ignore[arg-type]
 
-    @server.call_tool()  # type: ignore[misc]
+    @server.call_tool()  # type: ignore[untyped-decorator]
     async def call_tool(name: str, arguments: dict[str, object]) -> list[TextContent]:
         if name == "jibuff_interview":
             text = handle_interview(arguments)

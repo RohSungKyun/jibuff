@@ -7,7 +7,7 @@ packages = ["orchestrator", "interview", "validators", "evaluators", "reporters"
 
 [project]
 name = "jibuff"
-version = "0.4.1"
+version = "0.4.2"
 description = "Absorb the jitter in your requirements. A spec-driven workflow harness for AI coding agents."
 requires-python = ">=3.12"
 license = { text = "MIT" }
@@ -60,7 +60,7 @@ strict = true
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["mcp.server", "orchestrator.main"]
+module = ["jibuff_mcp.server", "orchestrator.main"]
 ignore_errors = true
 
 [tool.pytest.ini_options]

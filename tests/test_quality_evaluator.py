@@ -14,13 +14,15 @@ from orchestrator.task_queue import Task
 # ---------------------------------------------------------------------------
 
 def _make_client(json_payload: dict[str, object]) -> MagicMock:
-    """Return a mock Anthropic client that returns the given JSON as text."""
-    content = MagicMock()
-    content.text = json.dumps(json_payload)
+    """Return a mock OpenAI client that returns the given JSON as text."""
+    message = MagicMock()
+    message.content = json.dumps(json_payload)
+    choice = MagicMock()
+    choice.message = message
     response = MagicMock()
-    response.content = [content]
+    response.choices = [choice]
     client = MagicMock()
-    client.messages.create.return_value = response
+    client.chat.completions.create.return_value = response
     return client
 
 
@@ -114,12 +116,14 @@ def test_evaluate_score_uses_weights(tmp_path: Path) -> None:
 
 
 def test_evaluate_fallback_on_bad_json(tmp_path: Path) -> None:
-    content = MagicMock()
-    content.text = "not valid json at all"
+    message = MagicMock()
+    message.content = "not valid json at all"
+    choice = MagicMock()
+    choice.message = message
     response = MagicMock()
-    response.content = [content]
+    response.choices = [choice]
     client = MagicMock()
-    client.messages.create.return_value = response
+    client.chat.completions.create.return_value = response
 
     evaluator = QualityEvaluator(threshold=0.7, client=client)
     result = evaluator.evaluate(_task(), agent_output="x", workspace=tmp_path)

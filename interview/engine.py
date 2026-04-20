@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass, field
 
-import anthropic
+import openai
 
 from orchestrator.config import ModeConfig, get_mode
 
@@ -149,9 +150,12 @@ class InterviewSession:
 
 
 class InterviewEngine:
-    def __init__(self, mode: str = "quick", client: anthropic.Anthropic | None = None) -> None:
+    def __init__(self, mode: str = "quick", client: openai.OpenAI | None = None) -> None:
         self.mode_cfg = get_mode(mode)
-        self._client = client or anthropic.Anthropic()
+        self._client = client or openai.OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -215,13 +219,13 @@ class InterviewEngine:
     # ------------------------------------------------------------------
 
     def _call(self, prompt: str) -> str:
-        response = self._client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        response = self._client.chat.completions.create(
+            model="openrouter/auto",
             max_tokens=512,
             temperature=0,
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.content[0].text.strip()  # type: ignore[union-attr]
+        return (response.choices[0].message.content or "").strip()
 
     def _generate_questions(
         self,

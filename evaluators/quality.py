@@ -12,10 +12,11 @@ Dimensions:
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
-import anthropic
+import openai
 
 from orchestrator.task_queue import Task
 
@@ -72,11 +73,14 @@ class QualityResult:
 @dataclass
 class QualityEvaluator:
     threshold: float = 0.7
-    client: anthropic.Anthropic | None = None
+    client: openai.OpenAI | None = None
 
     def __post_init__(self) -> None:
         if self.client is None:
-            self.client = anthropic.Anthropic()
+            self.client = openai.OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+            )
 
     def evaluate(
         self,
@@ -91,13 +95,13 @@ class QualityEvaluator:
         )
 
         assert self.client is not None
-        response = self.client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        response = self.client.chat.completions.create(
+            model="openrouter/auto",
             max_tokens=256,
             temperature=0,
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = response.content[0].text.strip()  # type: ignore[union-attr]
+        raw = (response.choices[0].message.content or "").strip()
 
         try:
             data = json.loads(raw)

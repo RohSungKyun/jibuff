@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import shutil
 from pathlib import Path
 from typing import Annotated
 
@@ -216,6 +219,104 @@ def status(
     last_failure = ws / "storage" / "last_failure.md"
     if last_failure.exists():
         typer.echo("  last failure: present")
+
+
+def _mcp_config_path() -> Path:
+    return Path.home() / ".claude" / "mcp.json"
+
+
+def _detect_jb_command() -> str:
+    path = shutil.which("jb") or shutil.which("jibuff")
+    if not path:
+        typer.echo(
+            "Error: jb/jibuff not found on PATH.\n"
+            "Install with: pip install jibuff",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return path
+
+
+def _build_mcp_entry() -> dict[str, object]:
+    cmd = _detect_jb_command()
+    entry: dict[str, object] = {
+        "command": cmd,
+        "args": ["mcp", "serve"],
+    }
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if api_key:
+        entry["env"] = {"OPENROUTER_API_KEY": api_key}
+    return entry
+
+
+def _read_mcp_config() -> dict[str, object]:
+    path = _mcp_config_path()
+    if not path.exists():
+        return {"mcpServers": {}}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+    except json.JSONDecodeError:
+        typer.echo(f"Warning: {path} is malformed JSON. Creating fresh config.", err=True)
+        return {"mcpServers": {}}
+
+
+def _write_mcp_config(config: dict[str, object]) -> None:
+    path = _mcp_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+@app.command()
+def setup(
+    check: Annotated[bool, typer.Option("--check", help="Check current MCP registration")] = False,
+    unregister: Annotated[
+        bool, typer.Option("--unregister", help="Remove jibuff from MCP config")
+    ] = False,
+) -> None:
+    """Register jibuff as an MCP server in Claude Code."""
+    config = _read_mcp_config()
+    servers = config.setdefault("mcpServers", {})
+    mcp_path = _mcp_config_path()
+
+    if check:
+        if "jibuff" in servers:
+            entry = servers["jibuff"]
+            typer.echo(f"[jibuff setup] Registered in {mcp_path}")
+            typer.echo(f"  command: {entry.get('command')}")  # type: ignore[union-attr]
+            typer.echo(f"  args: {' '.join(entry.get('args', []))}")  # type: ignore[union-attr]
+            env = entry.get("env", {})  # type: ignore[union-attr]
+            if env:
+                typer.echo(f"  env: {', '.join(env.keys())}")  # type: ignore[union-attr]
+        else:
+            typer.echo("[jibuff setup] Not registered. Run 'jb setup' to register.")
+            raise typer.Exit(1)
+        return
+
+    if unregister:
+        if "jibuff" not in servers:
+            typer.echo("[jibuff setup] Not registered — nothing to remove.")
+            return
+        del servers["jibuff"]
+        _write_mcp_config(config)
+        typer.echo(f"[jibuff setup] Removed jibuff from {mcp_path}")
+        return
+
+    entry = _build_mcp_entry()
+
+    if "jibuff" in servers and servers["jibuff"] == entry:
+        typer.echo("[jibuff setup] Already registered with current config.")
+        return
+
+    action = "Updating" if "jibuff" in servers else "Registering"
+    servers["jibuff"] = entry
+    _write_mcp_config(config)
+
+    typer.echo(f"[jibuff setup] {action} MCP server...")
+    typer.echo(f"  command: {entry['command']} {' '.join(entry['args'])}")  # type: ignore[arg-type]
+    if "env" in entry:
+        typer.echo(f"  env: {', '.join(entry['env'].keys())}")  # type: ignore[union-attr]
+    typer.echo(f"  config: {mcp_path}")
+    typer.echo("[jibuff setup] Done. Restart Claude Code to pick up changes.")
 
 
 mcp_app = typer.Typer(help="MCP server commands")

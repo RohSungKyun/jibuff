@@ -249,12 +249,17 @@ def _detect_claude_command() -> str:
 
 def _run_claude_mcp(args: list[str]) -> subprocess.CompletedProcess[str]:
     claude = _detect_claude_command()
-    return subprocess.run(
-        [claude, "mcp", *args],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            [claude, "mcp", *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        typer.echo("Error: claude CLI command timed out after 30s.", err=True)
+        raise typer.Exit(1) from None
 
 
 def _is_jibuff_registered() -> bool:

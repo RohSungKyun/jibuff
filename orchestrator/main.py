@@ -78,7 +78,9 @@ def interview(
 
     typer.echo("[jibuff] Interview complete.")
     if ambiguity:
-        typer.echo(f"  Ambiguity score : {ambiguity.score:.2f} (threshold {ambiguity.threshold})")
+        typer.echo(
+            f"  Ambiguity score : {ambiguity.final_score:.2f} (threshold {ambiguity.threshold})"
+        )
     if risk:
         typer.echo(f"  Risk score      : {risk.score:.2f} (level {risk.level})")
     if session.rounds >= session.mode.max_interview_rounds:

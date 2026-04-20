@@ -144,6 +144,11 @@ class AmbiguityResult:
     threshold: float
     passed: bool                         # final_score <= threshold
 
+    @property
+    def score(self) -> float:
+        """Backward-compatible alias for callers expecting `score`."""
+        return self.final_score
+
     @classmethod
     def from_stages(
         cls,

@@ -106,6 +106,19 @@ def test_ambiguity_result_failed() -> None:
     assert result.passed is False
 
 
+def test_ambiguity_result_score_alias() -> None:
+    stage1 = check_keyword_coverage("build me something")
+    dims = DimensionalScore(goal=0.5, constraint=0.5, risk=0.5, environment=0.5, success=0.5)
+    result = AmbiguityResult.from_stages(
+        stage1=stage1,
+        contradictions=[],
+        dimensions=dims,
+        mode="quick",
+        threshold=0.25,
+    )
+    assert result.score == result.final_score
+
+
 # ---------------------------------------------------------------------------
 # RiskIndexer
 # ---------------------------------------------------------------------------

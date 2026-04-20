@@ -166,10 +166,11 @@ def handle_interview(args: dict[str, object]) -> str:
 
         if session.complete:
             tasks_md = engine.generate_tasks_md(session)
+            amb = session.last_ambiguity
+            amb_str = f"{amb.score:.2f}" if amb else "n/a"
             return (
                 f"[jibuff interview] mode={mode} | threshold={cfg.ambiguity_threshold}\n"
-                f"Interview complete. Ambiguity score: "
-                f"{session.last_ambiguity.score:.2f if session.last_ambiguity is not None else 'n/a'}\n\n"
+                f"Interview complete. Ambiguity score: {amb_str}\n\n"
                 f"Generated tasks:\n{tasks_md}"
             )
 

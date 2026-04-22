@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Annotated
 
@@ -223,10 +223,6 @@ def status(
         typer.echo("  last failure: present")
 
 
-def _mcp_config_path() -> Path:
-    return Path.home() / ".claude" / "mcp.json"
-
-
 def _detect_jb_command() -> str:
     path = shutil.which("jb") or shutil.which("jibuff")
     if not path:
@@ -239,33 +235,61 @@ def _detect_jb_command() -> str:
     return path
 
 
-def _build_mcp_entry() -> dict[str, object]:
-    cmd = _detect_jb_command()
-    entry: dict[str, object] = {
-        "command": cmd,
-        "args": ["mcp", "serve"],
-    }
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if api_key:
-        entry["env"] = {"OPENROUTER_API_KEY": api_key}
-    return entry
+def _detect_claude_command() -> str:
+    path = shutil.which("claude")
+    if not path:
+        typer.echo(
+            "Error: claude CLI not found on PATH.\n"
+            "Install Claude Code first: https://docs.claude.com/claude-code",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return path
 
 
-def _read_mcp_config() -> dict[str, object]:
-    path = _mcp_config_path()
-    if not path.exists():
-        return {"mcpServers": {}}
+def _run_claude_mcp(args: list[str]) -> subprocess.CompletedProcess[str]:
+    claude = _detect_claude_command()
     try:
-        return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
-    except json.JSONDecodeError:
-        typer.echo(f"Warning: {path} is malformed JSON. Creating fresh config.", err=True)
-        return {"mcpServers": {}}
+        return subprocess.run(
+            [claude, "mcp", *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        typer.echo("Error: claude CLI command timed out after 30s.", err=True)
+        raise typer.Exit(1) from None
 
 
-def _write_mcp_config(config: dict[str, object]) -> None:
-    path = _mcp_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+def _format_cli_error(result: subprocess.CompletedProcess[str]) -> str:
+    msg = result.stderr.rstrip() or result.stdout.rstrip()
+    if msg:
+        return msg
+    return f"claude mcp exited with code {result.returncode} (no output)"
+
+
+def _check_jibuff_registration() -> tuple[bool, str]:
+    """Return (is_registered, stdout). Exit with CLI error on unknown failure."""
+    result = _run_claude_mcp(["get", "jibuff"])
+    if result.returncode == 0:
+        return True, result.stdout
+    if "no mcp server" in result.stderr.lower():
+        return False, ""
+    typer.echo(
+        f"Error: `claude mcp get jibuff` failed (exit {result.returncode}).\n"
+        f"{_format_cli_error(result)}",
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
+def _registration_matches(stdout: str, jb_cmd: str, api_key: str | None) -> bool:
+    """Best-effort check that the current registration matches desired config."""
+    if not stdout or jb_cmd not in stdout or "serve" not in stdout:
+        return False
+    has_env = "OPENROUTER_API_KEY" in stdout
+    return has_env == (api_key is not None)
 
 
 @app.command()
@@ -275,49 +299,61 @@ def setup(
         bool, typer.Option("--unregister", help="Remove jibuff from MCP config")
     ] = False,
 ) -> None:
-    """Register jibuff as an MCP server in Claude Code."""
-    config = _read_mcp_config()
-    servers = config.setdefault("mcpServers", {})
-    mcp_path = _mcp_config_path()
-
+    """Register jibuff as an MCP server in Claude Code (user scope)."""
     if check:
-        if "jibuff" in servers:
-            entry = servers["jibuff"]
-            typer.echo(f"[jibuff setup] Registered in {mcp_path}")
-            typer.echo(f"  command: {entry.get('command')}")  # type: ignore[union-attr]
-            typer.echo(f"  args: {' '.join(entry.get('args', []))}")  # type: ignore[union-attr]
-            env = entry.get("env", {})  # type: ignore[union-attr]
-            if env:
-                typer.echo(f"  env: {', '.join(env.keys())}")  # type: ignore[union-attr]
+        is_registered, stdout = _check_jibuff_registration()
+        if is_registered:
+            typer.echo("[jibuff setup] Registered.")
+            typer.echo(stdout.rstrip())
         else:
             typer.echo("[jibuff setup] Not registered. Run 'jb setup' to register.")
             raise typer.Exit(1)
         return
 
     if unregister:
-        if "jibuff" not in servers:
+        is_registered, _ = _check_jibuff_registration()
+        if not is_registered:
             typer.echo("[jibuff setup] Not registered — nothing to remove.")
             return
-        del servers["jibuff"]
-        _write_mcp_config(config)
-        typer.echo(f"[jibuff setup] Removed jibuff from {mcp_path}")
+        result = _run_claude_mcp(["remove", "jibuff", "-s", "user"])
+        if result.returncode != 0:
+            typer.echo(_format_cli_error(result), err=True)
+            raise typer.Exit(1)
+        typer.echo("[jibuff setup] Removed jibuff from Claude Code MCP config.")
         return
 
-    entry = _build_mcp_entry()
+    jb_cmd = _detect_jb_command()
+    api_key = os.environ.get("OPENROUTER_API_KEY")
 
-    if "jibuff" in servers and servers["jibuff"] == entry:
+    is_registered, current_stdout = _check_jibuff_registration()
+    if is_registered and _registration_matches(current_stdout, jb_cmd, api_key):
         typer.echo("[jibuff setup] Already registered with current config.")
         return
 
-    action = "Updating" if "jibuff" in servers else "Registering"
-    servers["jibuff"] = entry
-    _write_mcp_config(config)
+    if is_registered:
+        remove_result = _run_claude_mcp(["remove", "jibuff", "-s", "user"])
+        if remove_result.returncode != 0:
+            typer.echo(_format_cli_error(remove_result), err=True)
+            raise typer.Exit(1)
+        action = "Updating"
+    else:
+        action = "Registering"
+
+    add_args = ["add", "-s", "user", "jibuff"]
+    if api_key:
+        add_args += ["-e", f"OPENROUTER_API_KEY={api_key}"]
+    add_args += ["--", jb_cmd, "mcp", "serve"]
+
+    add_result = _run_claude_mcp(add_args)
+    if add_result.returncode != 0:
+        typer.echo(_format_cli_error(add_result), err=True)
+        raise typer.Exit(1)
 
     typer.echo(f"[jibuff setup] {action} MCP server...")
-    typer.echo(f"  command: {entry['command']} {' '.join(entry['args'])}")  # type: ignore[arg-type]
-    if "env" in entry:
-        typer.echo(f"  env: {', '.join(entry['env'].keys())}")  # type: ignore[union-attr]
-    typer.echo(f"  config: {mcp_path}")
+    typer.echo(f"  command: {jb_cmd} mcp serve")
+    if api_key:
+        typer.echo("  env: OPENROUTER_API_KEY")
+    typer.echo("  scope: user")
     typer.echo("[jibuff setup] Done. Restart Claude Code to pick up changes.")
 
 

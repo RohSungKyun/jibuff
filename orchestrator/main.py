@@ -262,9 +262,34 @@ def _run_claude_mcp(args: list[str]) -> subprocess.CompletedProcess[str]:
         raise typer.Exit(1) from None
 
 
-def _is_jibuff_registered() -> bool:
+def _format_cli_error(result: subprocess.CompletedProcess[str]) -> str:
+    msg = result.stderr.rstrip() or result.stdout.rstrip()
+    if msg:
+        return msg
+    return f"claude mcp exited with code {result.returncode} (no output)"
+
+
+def _check_jibuff_registration() -> tuple[bool, str]:
+    """Return (is_registered, stdout). Exit with CLI error on unknown failure."""
     result = _run_claude_mcp(["get", "jibuff"])
-    return result.returncode == 0
+    if result.returncode == 0:
+        return True, result.stdout
+    if "no mcp server" in result.stderr.lower():
+        return False, ""
+    typer.echo(
+        f"Error: `claude mcp get jibuff` failed (exit {result.returncode}).\n"
+        f"{_format_cli_error(result)}",
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
+def _registration_matches(stdout: str, jb_cmd: str, api_key: str | None) -> bool:
+    """Best-effort check that the current registration matches desired config."""
+    if not stdout or jb_cmd not in stdout or "serve" not in stdout:
+        return False
+    has_env = "OPENROUTER_API_KEY" in stdout
+    return has_env == (api_key is not None)
 
 
 @app.command()
@@ -276,49 +301,52 @@ def setup(
 ) -> None:
     """Register jibuff as an MCP server in Claude Code (user scope)."""
     if check:
-        result = _run_claude_mcp(["get", "jibuff"])
-        if result.returncode == 0:
+        is_registered, stdout = _check_jibuff_registration()
+        if is_registered:
             typer.echo("[jibuff setup] Registered.")
-            typer.echo(result.stdout.rstrip())
+            typer.echo(stdout.rstrip())
         else:
             typer.echo("[jibuff setup] Not registered. Run 'jb setup' to register.")
             raise typer.Exit(1)
         return
 
     if unregister:
-        if not _is_jibuff_registered():
+        is_registered, _ = _check_jibuff_registration()
+        if not is_registered:
             typer.echo("[jibuff setup] Not registered — nothing to remove.")
             return
         result = _run_claude_mcp(["remove", "jibuff", "-s", "user"])
         if result.returncode != 0:
-            typer.echo(result.stderr.rstrip() or result.stdout.rstrip(), err=True)
+            typer.echo(_format_cli_error(result), err=True)
             raise typer.Exit(1)
         typer.echo("[jibuff setup] Removed jibuff from Claude Code MCP config.")
         return
 
     jb_cmd = _detect_jb_command()
+    api_key = os.environ.get("OPENROUTER_API_KEY")
 
-    if _is_jibuff_registered():
+    is_registered, current_stdout = _check_jibuff_registration()
+    if is_registered and _registration_matches(current_stdout, jb_cmd, api_key):
+        typer.echo("[jibuff setup] Already registered with current config.")
+        return
+
+    if is_registered:
         remove_result = _run_claude_mcp(["remove", "jibuff", "-s", "user"])
         if remove_result.returncode != 0:
-            typer.echo(
-                remove_result.stderr.rstrip() or remove_result.stdout.rstrip(),
-                err=True,
-            )
+            typer.echo(_format_cli_error(remove_result), err=True)
             raise typer.Exit(1)
         action = "Updating"
     else:
         action = "Registering"
 
     add_args = ["add", "-s", "user", "jibuff"]
-    api_key = os.environ.get("OPENROUTER_API_KEY")
     if api_key:
         add_args += ["-e", f"OPENROUTER_API_KEY={api_key}"]
     add_args += ["--", jb_cmd, "mcp", "serve"]
 
     add_result = _run_claude_mcp(add_args)
     if add_result.returncode != 0:
-        typer.echo(add_result.stderr.rstrip() or add_result.stdout.rstrip(), err=True)
+        typer.echo(_format_cli_error(add_result), err=True)
         raise typer.Exit(1)
 
     typer.echo(f"[jibuff setup] {action} MCP server...")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -40,12 +41,12 @@ def test_all_tools_have_required_fields() -> None:
 
 
 def test_interview_requires_request() -> None:
-    result = handle_interview({})
+    result = asyncio.run(handle_interview({}))
     assert "required" in result.lower() or "error" in result.lower()
 
 
 def test_interview_unknown_mode() -> None:
-    result = handle_interview({"request": "build x", "mode": "phaser"})
+    result = asyncio.run(handle_interview({"request": "build x", "mode": "phaser"}))
     assert "Error" in result
 
 
@@ -67,7 +68,9 @@ def _mock_engine(questions: list[str], complete: bool = False) -> MagicMock:
 def test_interview_quick_mode() -> None:
     engine = _mock_engine(["What is the target user?"])
     with patch("interview.engine.InterviewEngine", return_value=engine):
-        result = handle_interview({"request": "build a task CLI", "mode": "quick"})
+        result = asyncio.run(
+            handle_interview({"request": "build a task CLI", "mode": "quick"})
+        )
     assert "quick" in result
     assert "0.25" in result  # threshold
 
@@ -75,7 +78,9 @@ def test_interview_quick_mode() -> None:
 def test_interview_rtc_mode() -> None:
     engine = _mock_engine(["Latency budget?"])
     with patch("interview.engine.InterviewEngine", return_value=engine):
-        result = handle_interview({"request": "build WebRTC app", "mode": "rtc"})
+        result = asyncio.run(
+            handle_interview({"request": "build WebRTC app", "mode": "rtc"})
+        )
     assert "rtc" in result
     assert "0.15" in result
 
@@ -83,10 +88,12 @@ def test_interview_rtc_mode() -> None:
 def test_interview_with_answer() -> None:
     engine = _mock_engine(["Next question?"])
     with patch("interview.engine.InterviewEngine", return_value=engine):
-        result = handle_interview({
-            "request": "build something",
-            "answer": "admin users only",
-        })
+        result = asyncio.run(
+            handle_interview({
+                "request": "build something",
+                "answer": "admin users only",
+            })
+        )
     # answer is recorded in transcript; result should show a question round
     assert "question" in result.lower() or "round" in result.lower()
 

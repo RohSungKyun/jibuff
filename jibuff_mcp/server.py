@@ -132,7 +132,7 @@ TOOLS: list[dict[str, object]] = [
 # ---------------------------------------------------------------------------
 
 
-def handle_interview(args: dict[str, object]) -> str:
+async def handle_interview(args: dict[str, object]) -> str:
     """Run one interview step via InterviewEngine.
 
     Pass 'answer' to continue an in-progress session (session state is not
@@ -152,8 +152,6 @@ def handle_interview(args: dict[str, object]) -> str:
         return "Error: 'request' is required."
 
     try:
-        import asyncio
-
         from interview.engine import InterviewEngine
 
         engine = InterviewEngine(mode=mode)
@@ -162,7 +160,7 @@ def handle_interview(args: dict[str, object]) -> str:
         if answer:
             session.transcript.append({"role": "user", "content": str(answer)})
 
-        questions = asyncio.run(engine.step(session, user_answer=None))
+        questions = await engine.step(session, user_answer=None)
 
         if session.complete:
             tasks_md = engine.generate_tasks_md(session)
@@ -331,7 +329,7 @@ def create_server() -> object:
     @server.call_tool()  # type: ignore[untyped-decorator]
     async def call_tool(name: str, arguments: dict[str, object]) -> list[TextContent]:
         if name == "jibuff_interview":
-            text = handle_interview(arguments)
+            text = await handle_interview(arguments)
         elif name == "jibuff_run":
             text = handle_run(arguments, cwd)
         elif name == "jibuff_status":

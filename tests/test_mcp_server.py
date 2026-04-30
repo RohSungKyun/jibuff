@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -201,3 +202,64 @@ def test_cancel_updates_state_json(tmp_path: Path) -> None:
 def test_cancel_default_reason(tmp_path: Path) -> None:
     result = handle_cancel({}, cwd=tmp_path)
     assert "user requested" in result
+
+
+# ---------------------------------------------------------------------------
+# _watch_parent — orphan detection
+# ---------------------------------------------------------------------------
+
+
+class _FakeExit(BaseException):
+    """Stand-in for os._exit so tests can observe termination."""
+
+
+def test_watch_parent_exits_when_reparented() -> None:
+    """If getppid() differs from initial value, _watch_parent calls os._exit(0)."""
+    from jibuff_mcp import server
+
+    ppids = iter([1234, 9999])  # initial → reparented
+
+    async def instant_sleep(_seconds: float) -> None:
+        return
+
+    def fake_exit(code: int) -> None:
+        raise _FakeExit(code)
+
+    with (
+        patch("jibuff_mcp.server.os.getppid", side_effect=lambda: next(ppids)),
+        patch("jibuff_mcp.server.os._exit", side_effect=fake_exit),
+        patch("jibuff_mcp.server.asyncio.sleep", new=instant_sleep),
+    ):
+        try:
+            asyncio.run(server._watch_parent())
+        except _FakeExit as e:
+            assert e.args == (0,)
+        else:
+            raise AssertionError("_watch_parent did not exit")
+
+
+def test_watch_parent_continues_when_ppid_stable() -> None:
+    """Watcher loops without exiting while getppid() stays constant."""
+    from jibuff_mcp import server
+
+    sleep_count = 0
+
+    async def counting_sleep(_seconds: float) -> None:
+        nonlocal sleep_count
+        sleep_count += 1
+        if sleep_count >= 3:
+            raise asyncio.CancelledError
+        return
+
+    def fail_exit(_code: int) -> None:
+        raise AssertionError("os._exit should not be called when PPID is stable")
+
+    with (
+        patch("jibuff_mcp.server.os.getppid", return_value=4321),
+        patch("jibuff_mcp.server.os._exit", side_effect=fail_exit),
+        patch("jibuff_mcp.server.asyncio.sleep", new=counting_sleep),
+        contextlib.suppress(asyncio.CancelledError),
+    ):
+        asyncio.run(server._watch_parent())
+
+    assert sleep_count == 3

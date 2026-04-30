@@ -13,7 +13,9 @@ Launch with:
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 from pathlib import Path
 
 try:
@@ -30,6 +32,7 @@ from storage.artifacts import ArtifactStore
 _DEFAULT_STORAGE = Path.home() / ".jibuff" / "storage"
 _DEFAULT_TASKS = Path("spec") / "tasks.md"
 _DEFAULT_STATUS = Path("storage") / "task_status.json"
+_PARENT_POLL_INTERVAL_SECONDS = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -343,9 +346,31 @@ def create_server() -> object:
     return server
 
 
+async def _watch_parent() -> None:
+    """Exit immediately if the parent process dies (we get reparented).
+
+    On Unix the kernel reparents an orphaned child to PID 1 (init/launchd),
+    so getppid() changes. Polling this is the cross-platform fallback for
+    PR_SET_PDEATHSIG (Linux-only). Without it, the MCP server can persist
+    indefinitely if the client (Claude Code, Codex) crashes or is SIGKILLed
+    without closing stdin.
+    """
+    initial_ppid = os.getppid()
+    while True:
+        await asyncio.sleep(_PARENT_POLL_INTERVAL_SECONDS)
+        if os.getppid() != initial_ppid:
+            os._exit(0)
+
+
 async def serve() -> None:
     if not _MCP_AVAILABLE:
         raise ImportError("mcp package not installed. Run: pip install jibuff[mcp]")
     server = create_server()
     async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())  # type: ignore[attr-defined]
+        watcher = asyncio.create_task(_watch_parent())
+        try:
+            await server.run(read_stream, write_stream, server.create_initialization_options())  # type: ignore[attr-defined]
+        except (EOFError, BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            watcher.cancel()

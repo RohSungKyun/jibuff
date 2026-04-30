@@ -226,9 +226,9 @@ def test_watch_parent_exits_when_reparented() -> None:
         raise _FakeExit(code)
 
     with (
-        patch.object(server.os, "getppid", side_effect=lambda: next(ppids)),
-        patch.object(server.os, "_exit", side_effect=fake_exit),
-        patch.object(server.asyncio, "sleep", new=instant_sleep),
+        patch("jibuff_mcp.server.os.getppid", side_effect=lambda: next(ppids)),
+        patch("jibuff_mcp.server.os._exit", side_effect=fake_exit),
+        patch("jibuff_mcp.server.asyncio.sleep", new=instant_sleep),
     ):
         try:
             asyncio.run(server._watch_parent())
@@ -255,9 +255,9 @@ def test_watch_parent_continues_when_ppid_stable() -> None:
         raise AssertionError("os._exit should not be called when PPID is stable")
 
     with (
-        patch.object(server.os, "getppid", return_value=4321),
-        patch.object(server.os, "_exit", side_effect=fail_exit),
-        patch.object(server.asyncio, "sleep", new=counting_sleep),
+        patch("jibuff_mcp.server.os.getppid", return_value=4321),
+        patch("jibuff_mcp.server.os._exit", side_effect=fail_exit),
+        patch("jibuff_mcp.server.asyncio.sleep", new=counting_sleep),
         contextlib.suppress(asyncio.CancelledError),
     ):
         asyncio.run(server._watch_parent())

@@ -334,11 +334,11 @@ def create_server() -> object:
         if name == "jibuff_interview":
             text = await handle_interview(arguments)
         elif name == "jibuff_run":
-            text = handle_run(arguments, cwd)
+            text = await asyncio.to_thread(handle_run, arguments, cwd)
         elif name == "jibuff_status":
-            text = handle_status(arguments, cwd)
+            text = await asyncio.to_thread(handle_status, arguments, cwd)
         elif name == "jibuff_cancel":
-            text = handle_cancel(arguments, cwd)
+            text = await asyncio.to_thread(handle_cancel, arguments, cwd)
         else:
             text = f"Unknown tool: {name}"
         return [TextContent(type="text", text=text)]

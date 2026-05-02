@@ -214,13 +214,14 @@ async def test_engine_step_stage1_followup() -> None:
 def test_question_block_parses_choices_and_custom_input() -> None:
     block = QuestionBlock.from_text(
         "Which user group is primary?\n"
+        "Choose the best default if unclear.\n"
         "a) Admin users\n"
         "b) Guest users\n"
         "c) Internal operators\n"
         "직접 입력: type a custom answer if none fit"
     )
 
-    assert block.question == "Which user group is primary?"
+    assert block.question == "Which user group is primary? Choose the best default if unclear."
     assert block.choices == {
         "a": "Admin users",
         "b": "Guest users",

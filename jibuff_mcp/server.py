@@ -15,13 +15,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import fcntl
 import json
 import os
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    _fcntl = None  # type: ignore[assignment]
 
 try:
     from mcp.server import Server
@@ -183,16 +187,33 @@ def _valid_session_id(session_id: str) -> bool:
     return bool(_SESSION_ID_RE.fullmatch(session_id))
 
 
+def _flock_ex(fd: int) -> None:
+    if _fcntl is not None:
+        _fcntl.flock(fd, _fcntl.LOCK_EX)
+
+
+def _flock_un(fd: int) -> None:
+    if _fcntl is not None:
+        _fcntl.flock(fd, _fcntl.LOCK_UN)
+
+
 @contextlib.contextmanager
 def _session_lock(workspace: Path, session_id: str):  # type: ignore[no-untyped-def]
     lock_path = _session_lock_path(workspace, session_id)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("w", encoding="utf-8") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        _flock_ex(lock_file.fileno())
         try:
             yield
         finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            _flock_un(lock_file.fileno())
+
+
+def _file_mtime(path: Path) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, UTC)
+    except FileNotFoundError:
+        return None
 
 
 def _cleanup_expired_interview_sessions(workspace: Path) -> None:
@@ -206,7 +227,8 @@ def _cleanup_expired_interview_sessions(workspace: Path) -> None:
         expires_at = state.get("expires_at") if state else None
         if not isinstance(expires_at, str):
             fallback_expiry = now - timedelta(hours=_MCP_INTERVIEW_TTL_HOURS)
-            if datetime.fromtimestamp(path.stat().st_mtime, UTC) <= fallback_expiry:
+            mtime = _file_mtime(path)
+            if mtime is not None and mtime <= fallback_expiry:
                 path.unlink(missing_ok=True)
             continue
         try:
@@ -214,8 +236,13 @@ def _cleanup_expired_interview_sessions(workspace: Path) -> None:
                 path.unlink(missing_ok=True)
         except ValueError:
             fallback_expiry = now - timedelta(hours=_MCP_INTERVIEW_TTL_HOURS)
-            if datetime.fromtimestamp(path.stat().st_mtime, UTC) <= fallback_expiry:
+            mtime = _file_mtime(path)
+            if mtime is not None and mtime <= fallback_expiry:
                 path.unlink(missing_ok=True)
+
+    for path in sessions_dir.glob("*.lock"):
+        if not path.with_suffix(".md").exists():
+            path.unlink(missing_ok=True)
 
 
 def _read_session_state(path: Path) -> dict[str, object] | None:
@@ -391,9 +418,18 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
         return "Error: either 'request' or 'session_id' is required."
 
     try:
+        expected_revision_int = (
+            int(expected_revision)
+            if expected_revision is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        return "Error: 'revision' must be an integer."
+
+    try:
         from interview.engine import InterviewEngine, InterviewSession
 
-        if session_id and expected_revision is None:
+        if session_id and expected_revision_int is None:
             return "Error: 'revision' is required when continuing an interview session."
 
         lock_context = (
@@ -413,10 +449,10 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
                     return f"Error: interview session not found or expired: {session_id}"
 
                 revision = int(state.get("revision", 0))
-                if int(expected_revision) != revision:
+                if expected_revision_int != revision:
                     return (
                         "Error: interview session revision conflict. "
-                        f"Expected {expected_revision}, found {revision}."
+                        f"Expected {expected_revision_int}, found {revision}."
                     )
 
                 mode = str(state["mode"])

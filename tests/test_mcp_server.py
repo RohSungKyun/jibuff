@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from interview.engine import InterviewSession, QuestionBlock
 from jibuff_mcp.server import (
     TOOLS,
     handle_cancel,
@@ -111,7 +112,9 @@ def test_interview_cleans_broken_expired_session_file(tmp_path: Path) -> None:
     sessions_dir = tmp_path / ".jibuff" / "mcp" / "interviews"
     sessions_dir.mkdir(parents=True)
     broken = sessions_dir / "broken.md"
+    orphan_lock = sessions_dir / "orphan.lock"
     broken.write_text("not a jibuff session\n", encoding="utf-8")
+    orphan_lock.write_text("", encoding="utf-8")
     old = time.time() - (25 * 60 * 60)
     os.utime(broken, (old, old))
 
@@ -119,6 +122,7 @@ def test_interview_cleans_broken_expired_session_file(tmp_path: Path) -> None:
 
     assert "required" in result.lower()
     assert not broken.exists()
+    assert not orphan_lock.exists()
 
 
 def _response_value(response: str, key: str) -> str:
@@ -135,20 +139,20 @@ def test_interview_mcp_session_file_roundtrip(tmp_path: Path) -> None:
         def __init__(self, mode: str = "quick") -> None:
             self.mode = mode
 
-        def start(self, request: str) -> object:
-            from interview.engine import InterviewSession
+        def start(self, request: str) -> InterviewSession:
             from orchestrator.config import get_mode
 
             return InterviewSession(mode=get_mode(self.mode), original_request=request)
 
-        async def step(self, session: object, user_answer: str | None = None) -> list[str]:
-            from interview.engine import QuestionBlock
-
-            pending = getattr(session, "pending_question", None)
-            if user_answer and pending:
+        async def step(
+            self,
+            session: InterviewSession,
+            user_answer: str | None = None,
+        ) -> list[str]:
+            if user_answer and session.pending_question:
                 session.transcript.append({
                     "role": "user",
-                    "content": pending.resolve_answer(user_answer),
+                    "content": session.pending_question.resolve_answer(user_answer) or "",
                 })
                 session.pending_question = None
 
@@ -166,7 +170,7 @@ def test_interview_mcp_session_file_roundtrip(tmp_path: Path) -> None:
             session.rounds += 1
             return [session.pending_question.render()]
 
-        def generate_tasks_md(self, session: object) -> str:
+        def generate_tasks_md(self, session: InterviewSession) -> str:
             return "- [ ] P0-01: scaffold"
 
     with patch("interview.engine.InterviewEngine", FakeEngine):
@@ -195,6 +199,14 @@ def test_interview_mcp_session_file_roundtrip(tmp_path: Path) -> None:
         "workspace": str(tmp_path),
     }))
     assert "'revision' is required" in missing_revision
+
+    invalid_revision = asyncio.run(handle_interview({
+        "session_id": session_id,
+        "revision": "latest",
+        "answer": "b",
+        "workspace": str(tmp_path),
+    }))
+    assert "'revision' must be an integer" in invalid_revision
 
     with patch("interview.engine.InterviewEngine", FakeEngine):
         second = asyncio.run(handle_interview({

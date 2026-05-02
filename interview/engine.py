@@ -153,7 +153,7 @@ class QuestionBlock:
                 custom_label = line
                 continue
 
-            if len(choices) < 1 and not question_lines:
+            if not choices:
                 question_lines.append(line)
 
         if not question_lines:
@@ -356,15 +356,7 @@ class InterviewEngine:
             normalized = session.pending_question.resolve_answer(answer)
             return normalized if normalized is not None else answer.strip()
 
-        last_prompt = next(
-            (
-                turn["content"]
-                for turn in reversed(session.transcript)
-                if turn["role"] == "assistant"
-            ),
-            "",
-        )
-        return QuestionBlock.from_text(last_prompt).resolve_answer(answer) or answer.strip()
+        return answer.strip()
 
     def validate_user_answer(self, session: InterviewSession, answer: str) -> bool:
         """Validate selection-like answers while allowing direct typed answers."""

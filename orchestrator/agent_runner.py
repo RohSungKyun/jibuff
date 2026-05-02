@@ -1,13 +1,53 @@
-"""AgentRunner — invokes Claude Code CLI with isolated, task-scoped context."""
+"""AgentRunner — invokes a coding agent CLI with isolated, task-scoped context."""
 
 from __future__ import annotations
 
+import os
+import shlex
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .task_queue import Task
+
+# Known agents and their non-interactive flag sets. The prompt is appended
+# at call time. If a user's installed CLI version uses different flags, set
+# JIBUFF_AGENT_CMD to override the entire invocation.
+_AGENT_DEFAULTS: dict[str, list[str]] = {
+    "claude": ["--dangerously-skip-permissions", "-p"],
+    "codex": ["exec"],
+}
+_DETECT_ORDER: tuple[str, ...] = ("claude", "codex")
+
+
+def resolve_agent_cmd(override: list[str] | None = None) -> list[str]:
+    """Resolve which agent CLI invocation to use for task execution.
+
+    Priority:
+      1. ``override`` (e.g. from ``jb run --agent ...``)
+      2. ``JIBUFF_AGENT_CMD`` env var (shlex-split into argv)
+      3. Auto-detect on PATH in ``_DETECT_ORDER`` (claude first, then codex)
+
+    Raises ``RuntimeError`` if nothing is set and no known CLI is on PATH.
+    """
+    if override:
+        return list(override)
+
+    env_cmd = os.environ.get("JIBUFF_AGENT_CMD")
+    if env_cmd:
+        return shlex.split(env_cmd)
+
+    for name in _DETECT_ORDER:
+        if shutil.which(name):
+            return [name, *_AGENT_DEFAULTS[name]]
+
+    raise RuntimeError(
+        "No agent CLI found. Install claude or codex on PATH, "
+        "or set JIBUFF_AGENT_CMD to your full agent invocation "
+        "(e.g. JIBUFF_AGENT_CMD='codex exec --some-flag')."
+    )
 
 
 @dataclass
@@ -23,9 +63,7 @@ class RunResult:
 @dataclass
 class AgentRunner:
     workspace: Path
-    agent_cmd: list[str] = field(
-        default_factory=lambda: ["claude", "--dangerously-skip-permissions", "-p"]
-    )
+    agent_cmd: list[str] = field(default_factory=resolve_agent_cmd)
     timeout_seconds: int = 300
 
     def run(self, task: Task, failure_context: str | None = None) -> RunResult:

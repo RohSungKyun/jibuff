@@ -108,6 +108,14 @@ def run(
     workspace: Annotated[str, typer.Option(help="Workspace directory (default: cwd)")] = "",
     max_iterations: Annotated[int, typer.Option(help="Max loop iterations")] = 30,
     no_commit: Annotated[bool, typer.Option("--no-commit", help="Skip auto git commit")] = False,
+    agent: Annotated[
+        str,
+        typer.Option(
+            "--agent",
+            help="Agent CLI invocation (e.g. 'claude -p', 'codex exec'). "
+            "Overrides JIBUFF_AGENT_CMD and autodetect.",
+        ),
+    ] = "",
 ) -> None:
     """Run the agent loop against spec/tasks.md until all tasks are done."""
     try:
@@ -131,7 +139,9 @@ def run(
     storage_dir.mkdir(parents=True, exist_ok=True)
     status_file = storage_dir / "task_status.json"
 
-    from orchestrator.agent_runner import AgentRunner
+    import shlex
+
+    from orchestrator.agent_runner import AgentRunner, resolve_agent_cmd
     from orchestrator.loop_controller import LoopController
     from orchestrator.task_queue import TaskQueue
 
@@ -149,7 +159,13 @@ def run(
         typer.echo("[jibuff] All tasks already complete.")
         return
 
-    runner = AgentRunner(workspace=ws)
+    try:
+        agent_cmd = resolve_agent_cmd(shlex.split(agent) if agent else None)
+    except RuntimeError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+    runner = AgentRunner(workspace=ws, agent_cmd=agent_cmd)
     validators = _build_validators(mode, ws)
 
     quality_evaluator = None
@@ -188,7 +204,9 @@ def run(
 
     if result.stopped_reason == "agent_unavailable":
         typer.echo(
-            "\nError: claude CLI not found. Install: npm install -g @anthropic-ai/claude-code",
+            f"\nError: agent CLI '{agent_cmd[0]}' not found on PATH. "
+            "Install claude (npm install -g @anthropic-ai/claude-code) or codex, "
+            "or set JIBUFF_AGENT_CMD / use --agent to point at your CLI.",
             err=True,
         )
         raise typer.Exit(1)

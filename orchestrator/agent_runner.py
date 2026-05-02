@@ -12,14 +12,14 @@ from pathlib import Path
 
 from .task_queue import Task
 
-# Known agents and their non-interactive flag sets. The prompt is appended
-# at call time. If a user's installed CLI version uses different flags, set
-# JIBUFF_AGENT_CMD to override the entire invocation.
+# Known agents and their non-interactive flag sets, in autodetect priority
+# order (claude first, then codex). The prompt is appended at call time. If
+# a user's installed CLI version uses different flags, set JIBUFF_AGENT_CMD
+# to override the entire invocation.
 _AGENT_DEFAULTS: dict[str, list[str]] = {
     "claude": ["--dangerously-skip-permissions", "-p"],
     "codex": ["exec"],
 }
-_DETECT_ORDER: tuple[str, ...] = ("claude", "codex")
 
 
 def resolve_agent_cmd(override: list[str] | None = None) -> list[str]:
@@ -28,18 +28,18 @@ def resolve_agent_cmd(override: list[str] | None = None) -> list[str]:
     Priority:
       1. ``override`` (e.g. from ``jb run --agent ...``)
       2. ``JIBUFF_AGENT_CMD`` env var (shlex-split into argv)
-      3. Auto-detect on PATH in ``_DETECT_ORDER`` (claude first, then codex)
+      3. Auto-detect on PATH following ``_AGENT_DEFAULTS`` key order
 
     Raises ``RuntimeError`` if nothing is set and no known CLI is on PATH.
     """
-    if override:
+    if override is not None:
         return list(override)
 
     env_cmd = os.environ.get("JIBUFF_AGENT_CMD")
     if env_cmd:
         return shlex.split(env_cmd)
 
-    for name in _DETECT_ORDER:
+    for name in _AGENT_DEFAULTS:
         if shutil.which(name):
             return [name, *_AGENT_DEFAULTS[name]]
 

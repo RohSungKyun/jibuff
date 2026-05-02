@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -138,8 +139,6 @@ def run(
 
     storage_dir.mkdir(parents=True, exist_ok=True)
     status_file = storage_dir / "task_status.json"
-
-    import shlex
 
     from orchestrator.agent_runner import AgentRunner, resolve_agent_cmd
     from orchestrator.loop_controller import LoopController

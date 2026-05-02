@@ -35,7 +35,7 @@ Request → [Interview] → [Spec Lock] → [Agent Loop] → [Validation] → Ar
 |---|---|---|
 | Ambiguity threshold | ≤ 0.25 | ≤ 0.15 |
 | Risk gate | none | < 0.4 |
-| Max interview rounds | 5 | 15 |
+| Max interview rounds | 5 | 8 |
 | Validator stack | lint, types, tests, security | + device, network, fallback, firewall |
 | Target use case | General features, scripts, APIs | WebRTC, media, real-time protocols |
 

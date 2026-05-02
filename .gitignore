@@ -11,6 +11,7 @@ build/
 *.egg-info/
 .venv/
 venv/
+.jibuff/
 workspace/*
 !workspace/.gitkeep
 storage/last_failure.md

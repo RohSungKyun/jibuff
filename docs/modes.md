@@ -44,7 +44,7 @@ jibuff run --mode quick "add CSV export to the report module"
 - Features deployed behind enterprise firewalls or proxies
 
 **Interview:**
-- Max 15 rounds
+- Max 8 rounds
 - Ambiguity threshold: <= 0.15
 - Risk gate: Level 1–2 only (score < 0.4); Level 3+ requires extended risk-focused interview
 - Additional question pools: device targets, network assumptions, fallback requirements, firewall constraints
@@ -93,7 +93,7 @@ jibuff run --mode phaser "implement player position interpolation"
 
 | | quick | rtc | phaser |
 |--|:-----:|:---:|:------:|
-| Max interview rounds | 5 | 15 | 15+ |
+| Max interview rounds | 5 | 8 | 15+ |
 | Ambiguity threshold | 0.25 | 0.15 | 0.15 |
 | Risk gate | none | < 0.4 | < 0.4 |
 | Lint + format | ✓ | ✓ | ✓ |

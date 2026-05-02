@@ -14,8 +14,13 @@ Launch with:
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import fcntl
 import json
 import os
+import re
+import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 try:
@@ -33,6 +38,12 @@ _DEFAULT_STORAGE = Path.home() / ".jibuff" / "storage"
 _DEFAULT_TASKS = Path("spec") / "tasks.md"
 _DEFAULT_STATUS = Path("storage") / "task_status.json"
 _PARENT_POLL_INTERVAL_SECONDS = 10.0
+_MCP_INTERVIEW_TTL_HOURS = 24
+_SESSION_BLOCK_RE = re.compile(
+    r"```json jibuff-session\n(?P<json>.*?)\n```",
+    flags=re.DOTALL,
+)
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +64,14 @@ TOOLS: list[dict[str, object]] = [
                     "type": "string",
                     "description": "The initial idea or feature request to clarify",
                 },
+                "session_id": {
+                    "type": "string",
+                    "description": "Existing MCP interview session id to continue",
+                },
+                "revision": {
+                    "type": "integer",
+                    "description": "Expected session revision for optimistic concurrency",
+                },
                 "mode": {
                     "type": "string",
                     "enum": ["quick", "rtc"],
@@ -65,8 +84,17 @@ TOOLS: list[dict[str, object]] = [
                         "Answer to the previous round of questions (omit for first call)"
                     ),
                 },
+                "action": {
+                    "type": "string",
+                    "enum": ["continue", "cancel"],
+                    "description": "Set to cancel to remove an active MCP interview session",
+                    "default": "continue",
+                },
+                "workspace": {
+                    "type": "string",
+                    "description": "Workspace used for .jibuff/mcp/interviews state files",
+                },
             },
-            "required": ["request"],
         },
     },
     {
@@ -135,53 +163,313 @@ TOOLS: list[dict[str, object]] = [
 # ---------------------------------------------------------------------------
 
 
-async def handle_interview(args: dict[str, object]) -> str:
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _interview_dir(workspace: Path) -> Path:
+    return workspace / ".jibuff" / "mcp" / "interviews"
+
+
+def _session_path(workspace: Path, session_id: str) -> Path:
+    return _interview_dir(workspace) / f"{session_id}.md"
+
+
+def _session_lock_path(workspace: Path, session_id: str) -> Path:
+    return _interview_dir(workspace) / f"{session_id}.lock"
+
+
+def _valid_session_id(session_id: str) -> bool:
+    return bool(_SESSION_ID_RE.fullmatch(session_id))
+
+
+@contextlib.contextmanager
+def _session_lock(workspace: Path, session_id: str):  # type: ignore[no-untyped-def]
+    lock_path = _session_lock_path(workspace, session_id)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _cleanup_expired_interview_sessions(workspace: Path) -> None:
+    now = _utc_now()
+    sessions_dir = _interview_dir(workspace)
+    if not sessions_dir.exists():
+        return
+
+    for path in sessions_dir.glob("*.md"):
+        state = _read_session_state(path)
+        expires_at = state.get("expires_at") if state else None
+        if not isinstance(expires_at, str):
+            fallback_expiry = now - timedelta(hours=_MCP_INTERVIEW_TTL_HOURS)
+            if datetime.fromtimestamp(path.stat().st_mtime, UTC) <= fallback_expiry:
+                path.unlink(missing_ok=True)
+            continue
+        try:
+            if datetime.fromisoformat(expires_at) <= now:
+                path.unlink(missing_ok=True)
+        except ValueError:
+            fallback_expiry = now - timedelta(hours=_MCP_INTERVIEW_TTL_HOURS)
+            if datetime.fromtimestamp(path.stat().st_mtime, UTC) <= fallback_expiry:
+                path.unlink(missing_ok=True)
+
+
+def _read_session_state(path: Path) -> dict[str, object] | None:
+    if not path.exists():
+        return None
+    match = _SESSION_BLOCK_RE.search(path.read_text(encoding="utf-8"))
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group("json"))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
+def _render_session_md(state: dict[str, object]) -> str:
+    transcript = state.get("transcript", [])
+    pending = state.get("pending_question")
+    lines = [
+        "```json jibuff-session",
+        json.dumps(state, indent=2, ensure_ascii=False),
+        "```",
+        "",
+        "# Jibuff MCP Interview Session",
+        "",
+        f"- Session: {state.get('session_id')}",
+        f"- Revision: {state.get('revision')}",
+        f"- Mode: {state.get('mode')}",
+        f"- Status: {state.get('status')}",
+        f"- Expires: {state.get('expires_at')}",
+        "",
+        "## Original Request",
+        "",
+        str(state.get("original_request", "")),
+        "",
+    ]
+
+    if isinstance(pending, dict):
+        lines.extend([
+            "## Pending Question",
+            "",
+            str(pending.get("question", "")),
+            "",
+            "Choices:",
+        ])
+        choices = pending.get("choices", {})
+        if isinstance(choices, dict):
+            for key in ("a", "b", "c"):
+                if key in choices:
+                    lines.append(f"- {key}: {choices[key]}")
+        lines.extend(["", str(pending.get("custom_label", "직접 입력")), ""])
+
+    lines.extend(["## Transcript", ""])
+    if isinstance(transcript, list):
+        for turn in transcript:
+            if not isinstance(turn, dict):
+                continue
+            role = str(turn.get("role", "unknown")).title()
+            content = str(turn.get("content", ""))
+            lines.extend([f"### {role}", "", content, ""])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _question_to_state(question: object) -> dict[str, object] | None:
+    if question is None:
+        return None
+    return {
+        "question": getattr(question, "question", ""),
+        "choices": dict(getattr(question, "choices", {})),
+        "custom_label": getattr(question, "custom_label", "직접 입력"),
+    }
+
+
+def _state_from_session(
+    session: object,
+    *,
+    session_id: str,
+    revision: int,
+    mode: str,
+    original_request: str,
+    created_at: str,
+) -> dict[str, object]:
+    now = _utc_now()
+    return {
+        "schema_version": 1,
+        "session_id": session_id,
+        "revision": revision,
+        "mode": mode,
+        "status": "complete" if getattr(session, "complete", False) else "active",
+        "original_request": original_request,
+        "rounds": int(getattr(session, "rounds", 0)),
+        "transcript": list(getattr(session, "transcript", [])),
+        "pending_question": _question_to_state(getattr(session, "pending_question", None)),
+        "created_at": created_at,
+        "updated_at": now.isoformat(),
+        "expires_at": (now + timedelta(hours=_MCP_INTERVIEW_TTL_HOURS)).isoformat(),
+    }
+
+
+def _session_from_state(state: dict[str, object]) -> object:
+    from interview.engine import InterviewSession, QuestionBlock
+
+    mode = str(state["mode"])
+    session = InterviewSession(
+        mode=get_mode(mode),
+        original_request=str(state["original_request"]),
+        rounds=int(state.get("rounds", 0)),
+        transcript=[
+            {"role": str(turn.get("role", "")), "content": str(turn.get("content", ""))}
+            for turn in state.get("transcript", [])
+            if isinstance(turn, dict)
+        ],
+    )
+    pending = state.get("pending_question")
+    if isinstance(pending, dict):
+        choices = pending.get("choices", {})
+        parsed_choices = (
+            {str(k): str(v) for k, v in choices.items()}
+            if isinstance(choices, dict)
+            else {}
+        )
+        session.pending_question = QuestionBlock(
+            question=str(pending.get("question", "")),
+            choices=parsed_choices,
+            custom_label=str(pending.get("custom_label", "직접 입력")),
+        )
+    return session
+
+
+async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> str:
     """Run one interview step via InterviewEngine.
 
-    Pass 'answer' to continue an in-progress session (session state is not
-    persisted between MCP calls — each call is stateless; use the CLI for
-    multi-round interactive sessions).
+    MCP calls persist interview state in workspace-local markdown artifacts.
+    The CLI path keeps using in-memory sessions and does not create these files.
     """
+    workspace = Path(str(args["workspace"])) if "workspace" in args else (cwd or Path.cwd())
     request = str(args.get("request", ""))
+    session_id = str(args.get("session_id", ""))
     mode = str(args.get("mode", "quick"))
     answer = args.get("answer")
+    action = str(args.get("action", "continue"))
+    expected_revision = args.get("revision")
+
+    _cleanup_expired_interview_sessions(workspace)
+
+    if session_id and not _valid_session_id(session_id):
+        return "Error: invalid 'session_id'. Use only letters, numbers, '.', '_', and '-'."
+
+    if action == "cancel":
+        if not session_id:
+            return "Error: 'session_id' is required when cancelling an interview session."
+        with _session_lock(workspace, session_id):
+            state_path = _session_path(workspace, session_id)
+            state_path.unlink(missing_ok=True)
+        return f"[jibuff interview] cancelled session_id: {session_id}"
 
     try:
         cfg = get_mode(mode)
     except ValueError as e:
         return f"Error: {e}"
 
-    if not request:
-        return "Error: 'request' is required."
+    if answer is not None and not session_id:
+        return "Error: 'session_id' is required when providing 'answer'."
+
+    if not request and not session_id:
+        return "Error: either 'request' or 'session_id' is required."
 
     try:
-        from interview.engine import InterviewEngine
+        from interview.engine import InterviewEngine, InterviewSession
 
-        engine = InterviewEngine(mode=mode)
-        session = engine.start(request)
+        if session_id and expected_revision is None:
+            return "Error: 'revision' is required when continuing an interview session."
 
-        if answer:
-            session.transcript.append({"role": "user", "content": str(answer)})
+        lock_context = (
+            _session_lock(workspace, session_id)
+            if session_id
+            else contextlib.nullcontext()
+        )
+        with lock_context:
+            engine = InterviewEngine(mode=mode)
+            created_at = _utc_now().isoformat()
+            revision = 0
 
-        questions = await engine.step(session, user_answer=None)
+            if session_id:
+                state_path = _session_path(workspace, session_id)
+                state = _read_session_state(state_path)
+                if not state:
+                    return f"Error: interview session not found or expired: {session_id}"
 
-        if session.complete:
-            tasks_md = engine.generate_tasks_md(session)
-            amb = session.last_ambiguity
-            amb_str = f"{amb.final_score:.2f}" if amb else "n/a"
-            return (
-                f"[jibuff interview] mode={mode} | threshold={cfg.ambiguity_threshold}\n"
-                f"Interview complete. Ambiguity score: {amb_str}\n\n"
-                f"Generated tasks:\n{tasks_md}"
-            )
+                revision = int(state.get("revision", 0))
+                if int(expected_revision) != revision:
+                    return (
+                        "Error: interview session revision conflict. "
+                        f"Expected {expected_revision}, found {revision}."
+                    )
 
-        lines = [
-            f"[jibuff interview] mode={mode} | threshold={cfg.ambiguity_threshold}",
-            f"Round {session.rounds} — clarifying questions:",
-            "",
-        ]
-        lines.extend(f"  {q}" for q in questions)
-        return "\n".join(lines)
+                mode = str(state["mode"])
+                cfg = get_mode(mode)
+                engine = InterviewEngine(mode=mode)
+                session = _session_from_state(state)
+                request = str(state["original_request"])
+                created_at = str(state.get("created_at", created_at))
+            else:
+                session_id = uuid.uuid4().hex
+                session = engine.start(request)
+                state_path = _session_path(workspace, session_id)
+
+            user_answer = str(answer) if answer is not None else None
+            questions = await engine.step(session, user_answer=user_answer)
+            next_revision = revision + 1
+
+            if session.complete:
+                tasks_md = engine.generate_tasks_md(session)
+                amb = session.last_ambiguity
+                amb_str = f"{amb.final_score:.2f}" if amb else "n/a"
+                state_path.unlink(missing_ok=True)
+                return (
+                    f"[jibuff interview] mode={mode} | threshold={cfg.ambiguity_threshold}\n"
+                    f"session_id: {session_id}\n"
+                    f"Interview complete. Ambiguity score: {amb_str}\n\n"
+                    f"Generated tasks:\n{tasks_md}"
+                )
+
+            # Unit tests often patch InterviewEngine with MagicMock sessions; only
+            # real sessions have persistable state.
+            if isinstance(session, InterviewSession):
+                state = _state_from_session(
+                    session,
+                    session_id=session_id,
+                    revision=next_revision,
+                    mode=mode,
+                    original_request=request,
+                    created_at=created_at,
+                )
+                _atomic_write_text(state_path, _render_session_md(state))
+
+            lines = [
+                f"[jibuff interview] mode={mode} | threshold={cfg.ambiguity_threshold}",
+                f"session_id: {session_id}",
+                f"revision: {next_revision}",
+                f"state_file: {state_path}",
+                f"Round {session.rounds} — clarifying questions:",
+                "Reply with a/b/c, or provide a custom answer.",
+                "",
+            ]
+            lines.extend(f"  {line}" for q in questions for line in q.splitlines())
+            return "\n".join(lines)
 
     except Exception as e:
         return f"Error running interview: {e}"
@@ -332,7 +620,7 @@ def create_server() -> object:
     @server.call_tool()  # type: ignore[untyped-decorator]
     async def call_tool(name: str, arguments: dict[str, object]) -> list[TextContent]:
         if name == "jibuff_interview":
-            text = await handle_interview(arguments)
+            text = await handle_interview(arguments, cwd)
         elif name == "jibuff_run":
             text = await asyncio.to_thread(handle_run, arguments, cwd)
         elif name == "jibuff_status":

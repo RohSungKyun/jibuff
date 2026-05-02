@@ -12,7 +12,7 @@ from interview.ambiguity import (
     DimensionalScore,
     check_keyword_coverage,
 )
-from interview.engine import InterviewEngine, InterviewSession
+from interview.engine import InterviewEngine, InterviewSession, QuestionBlock
 from interview.risk import RiskDimensions, RiskResult, score_to_level
 
 # ---------------------------------------------------------------------------
@@ -199,9 +199,71 @@ async def test_engine_step_stage1_followup() -> None:
     _mock_call(engine, ["What type of users will use this?\nWhat is the expected environment?"])
     session = engine.start("build me a thing")  # triggers stage1 followup
     questions = await engine.step(session)
-    assert len(questions) >= 1
+    assert len(questions) == 1
+    assert questions[0] == (
+        "What type of users will use this?\n"
+        "a) Use the most common/default assumption\n"
+        "b) Keep this out of scope for now\n"
+        "c) Not sure yet; mark it as an open issue\n"
+        "직접 입력"
+    )
     assert session.rounds == 1
     assert session.complete is False
+
+
+def test_question_block_parses_choices_and_custom_input() -> None:
+    block = QuestionBlock.from_text(
+        "Which user group is primary?\n"
+        "a) Admin users\n"
+        "b) Guest users\n"
+        "c) Internal operators\n"
+        "직접 입력: type a custom answer if none fit"
+    )
+
+    assert block.question == "Which user group is primary?"
+    assert block.choices == {
+        "a": "Admin users",
+        "b": "Guest users",
+        "c": "Internal operators",
+    }
+    assert block.resolve_answer("b") == "Selected b: Guest users"
+    assert block.resolve_answer("B.") == "Selected b: Guest users"
+    assert block.resolve_answer("external partners") == "external partners"
+    assert block.resolve_answer("d") is None
+
+
+def test_engine_validates_and_normalizes_letter_answer_to_option_text() -> None:
+    engine = _make_engine("quick")
+    session = engine.start("build me a thing")
+    session.pending_question = QuestionBlock.from_text(
+        "Which user group is primary?\n"
+        "a) Admin users\n"
+        "b) Guest users\n"
+        "c) Internal operators\n"
+        "직접 입력: type a custom answer if none fit"
+    )
+
+    assert engine.validate_user_answer(session, "b") is True
+    assert engine.validate_user_answer(session, "d") is False
+    assert engine.validate_user_answer(session, "") is False
+    assert engine._normalize_user_answer(session, "b") == "Selected b: Guest users"
+    assert engine._normalize_user_answer(session, "external partners") == "external partners"
+
+
+@pytest.mark.asyncio
+async def test_engine_rejects_empty_answer() -> None:
+    engine = _make_engine("quick")
+    session = engine.start("build me a thing")
+    session.pending_question = QuestionBlock.from_text(
+        "Which user group is primary?\n"
+        "a) Admin users\n"
+        "b) Guest users\n"
+        "c) Internal operators\n"
+        "직접 입력: type a custom answer if none fit"
+    )
+
+    with pytest.raises(ValueError, match="Invalid answer"):
+        await engine.step(session, user_answer="")
 
 
 @pytest.mark.asyncio

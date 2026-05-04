@@ -31,6 +31,10 @@ class RecoverReport:
     missing_run: bool = False
 
 
+class RuntimeClaimError(RuntimeError):
+    """Raised when a runtime task claim or transition is no longer valid."""
+
+
 class RuntimeStore:
     """File-backed run state for future parallel workers.
 
@@ -108,14 +112,19 @@ class RuntimeStore:
         return store
 
     @classmethod
-    def active(cls, workspace: Path) -> RuntimeStore | None:
+    def active(cls, workspace: Path, *, running_only: bool = True) -> RuntimeStore | None:
         path = cls.active_run_path(workspace)
         data = _read_json(path)
         run_id = data.get("run_id")
         if not isinstance(run_id, str):
             return None
         store = cls(workspace, run_id)
-        return store if store.manifest_path.exists() else None
+        if not store.manifest_path.exists():
+            return None
+        manifest = store._read_json(store.manifest_path)
+        if running_only and manifest.get("status") != "running":
+            return None
+        return store
 
     @classmethod
     def latest(cls, workspace: Path) -> RuntimeStore | None:
@@ -152,15 +161,27 @@ class RuntimeStore:
         *,
         worker_id: str = DEFAULT_WORKER_ID,
         claim_token: str | None = None,
+        expected_revision: int | None = None,
     ) -> str:
         token = claim_token or f"{task.id}:{uuid.uuid4().hex}"
         now = _utc_timestamp()
         with self._file_lock("tasks", task.id):
             state = self._read_json(self.task_path(task.id))
+            status = state.get("status")
+            if status != "todo":
+                raise RuntimeClaimError(f"task {task.id} is not claimable (status={status})")
+            if state.get("claim_token") is not None:
+                raise RuntimeClaimError(f"task {task.id} is already claimed")
+            revision = int(state.get("revision", 0))
+            if expected_revision is not None and revision != expected_revision:
+                raise RuntimeClaimError(
+                    f"stale runtime revision for task {task.id}: "
+                    f"expected {expected_revision}, got {revision}"
+                )
             state.update(
                 {
                     "status": "in_progress",
-                    "revision": int(state.get("revision", 0)) + 1,
+                    "revision": revision + 1,
                     "claimed_by": worker_id,
                     "claim_token": token,
                     "claimed_at": now,
@@ -213,6 +234,10 @@ class RuntimeStore:
         manifest["status"] = status
         manifest["updated_at"] = _utc_timestamp()
         self._write_json(self.manifest_path, manifest)
+        active_path = self.active_run_path(self.workspace)
+        active = _read_json(active_path)
+        if active.get("run_id") == self.run_id:
+            active_path.unlink(missing_ok=True)
         self.append_event("run_finished", {"status": status})
 
     def inspect(self) -> dict[str, object]:
@@ -248,6 +273,9 @@ class RuntimeStore:
             with self._file_lock("tasks", task_id):
                 current = self._read_json(path)
                 if current.get("status") != "in_progress":
+                    continue
+                if not force and not _is_stale_task(current, cutoff):
+                    skipped.append(task_id)
                     continue
                 worker_id = current.get("claimed_by")
                 current["status"] = "todo"

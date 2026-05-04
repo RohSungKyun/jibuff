@@ -87,11 +87,13 @@ class LoopController:
                     worker_count=1,
                 )
                 self.runtime_store = runtime_store
+            expected_runtime_revision = task.revision
             claim_token = self.queue.mark_in_progress(task.id)
             runtime_store.claim_task(
                 task,
                 worker_id=self.worker_id,
                 claim_token=claim_token,
+                expected_revision=expected_runtime_revision,
             )
             write_progress(self.queue, self.storage_dir)
 

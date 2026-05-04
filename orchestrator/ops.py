@@ -120,6 +120,7 @@ def inspect_workspace(workspace: Path) -> InspectResult:
                 "claimed_by": task.claimed_by,
                 "claimed_at": task.claimed_at,
                 "claim_token": task.claim_token,
+                "heartbeat_at": task.heartbeat_at,
                 "description": task.description,
             }
             for task in queue._tasks
@@ -129,7 +130,10 @@ def inspect_workspace(workspace: Path) -> InspectResult:
     result.last_failure = (storage_dir / "last_failure.md").exists()
     result.open_issue_count = _json_list_len(storage_dir / "open_issues.json")
     result.interview_sessions = list_interview_sessions(workspace)
-    runtime_store = RuntimeStore.active(workspace) or RuntimeStore.latest(workspace)
+    runtime_store = RuntimeStore.active(
+        workspace,
+        running_only=False,
+    ) or RuntimeStore.latest(workspace)
     if runtime_store is not None:
         result.runtime_run = runtime_store.inspect()
     return result
@@ -163,7 +167,11 @@ def recover_workspace(
     if not tasks_file.exists():
         return ["No spec/tasks.md found."]
 
-    runtime_store = RuntimeStore.active(workspace) or RuntimeStore.latest(workspace)
+    runtime_store = RuntimeStore.active(workspace, running_only=True)
+    if runtime_store is None:
+        latest = RuntimeStore.latest(workspace)
+        if latest is not None and _runtime_has_in_progress_tasks(latest):
+            runtime_store = latest
     if runtime_store is not None:
         report = runtime_store.recover_stale(
             stale_after_minutes=stale_after_minutes,
@@ -172,8 +180,15 @@ def recover_workspace(
         if report.requeued:
             queue = TaskQueue(tasks_file=tasks_file, status_file=status_file)
             for task_id in report.requeued:
-                queue.requeue(task_id)
-                actions.append(f"Requeued stale in-progress task {task_id}.")
+                try:
+                    queue.requeue(task_id)
+                except OSError as exc:
+                    actions.append(
+                        f"Requeued stale in-progress task {task_id}, "
+                        f"but legacy task_status mirror update failed: {exc}"
+                    )
+                else:
+                    actions.append(f"Requeued stale in-progress task {task_id}.")
         for task_id in report.skipped:
             actions.append(
                 f"Skipped active/recent in-progress task {task_id}; use --force to requeue."
@@ -318,3 +333,11 @@ def _legacy_task_is_stale(timestamp: str | None, cutoff: datetime) -> bool:
         return datetime.fromisoformat(timestamp) <= cutoff
     except ValueError:
         return True
+
+
+def _runtime_has_in_progress_tasks(runtime_store: RuntimeStore) -> bool:
+    data = runtime_store.inspect()
+    tasks = data.get("tasks")
+    if not isinstance(tasks, list):
+        return False
+    return any(isinstance(task, dict) and task.get("status") == "in_progress" for task in tasks)

@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from orchestrator.task_queue import Task
-from reporters.escalation import build_issue_body, create_github_issue
+from reporters import escalation
+from reporters.escalation import build_issue_body, create_github_issue, prompt_escalation
+
+
+@pytest.fixture(autouse=True)
+def _reset_gh_cache() -> None:
+    escalation._check_gh_ready.cache_clear()
 
 
 def _task() -> Task:
@@ -183,3 +192,55 @@ def test_loop_controller_no_escalation_below_threshold(tmp_path: Path) -> None:
 
     controller.run()
     assert not mock_escalation.called
+
+
+# ---------------------------------------------------------------------------
+# _check_gh_ready — cached gh auth detection
+# ---------------------------------------------------------------------------
+
+
+def _ok() -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+
+def _fail() -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="not logged in")
+
+
+def test_check_gh_ready_returns_true_when_authenticated() -> None:
+    with patch("reporters.escalation.subprocess.run", return_value=_ok()) as mock_run:
+        assert escalation._check_gh_ready() is True
+        # Cached on second call.
+        assert escalation._check_gh_ready() is True
+        assert mock_run.call_count == 1
+
+
+def test_check_gh_ready_returns_false_when_not_authenticated() -> None:
+    with patch("reporters.escalation.subprocess.run", return_value=_fail()):
+        assert escalation._check_gh_ready() is False
+
+
+def test_check_gh_ready_handles_missing_gh_cli() -> None:
+    with patch("reporters.escalation.subprocess.run", side_effect=FileNotFoundError()):
+        assert escalation._check_gh_ready() is False
+
+
+def test_prompt_escalation_skips_when_gh_not_ready(tmp_path: Path) -> None:
+    """When gh is not authenticated, prompt_escalation must not call typer.prompt."""
+    with (
+        patch("reporters.escalation.subprocess.run", return_value=_fail()),
+        patch("reporters.escalation.typer.prompt") as mock_prompt,
+    ):
+        url = prompt_escalation(_task(), 3, {"lint": "E501"}, tmp_path)
+    assert url is None
+    assert not mock_prompt.called
+
+
+def test_prompt_escalation_proceeds_when_gh_ready(tmp_path: Path) -> None:
+    """When gh is authenticated, prompt_escalation should ask the user."""
+    with (
+        patch("reporters.escalation.subprocess.run", return_value=_ok()),
+        patch("reporters.escalation.typer.prompt", return_value="n") as mock_prompt,
+    ):
+        prompt_escalation(_task(), 3, {"lint": "E501"}, tmp_path)
+    assert mock_prompt.called

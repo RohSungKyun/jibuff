@@ -361,3 +361,56 @@ def test_resolve_agent_cmd_raises_when_nothing_available(
     monkeypatch.setattr("orchestrator.agent_runner.shutil.which", lambda _: None)
     with pytest.raises(RuntimeError, match="No agent CLI"):
         resolve_agent_cmd()
+
+
+# ---------------------------------------------------------------------------
+# LoopController — verbose narration
+# ---------------------------------------------------------------------------
+
+
+def test_loop_controller_verbose_emits_per_step_narration(
+    tmp_path: Path, tmp_tasks: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    tasks_file, status_file = tmp_tasks
+    q = TaskQueue(tasks_file=tasks_file, status_file=status_file)
+    runner = AgentRunner(workspace=tmp_path, agent_cmd=["echo"])
+
+    ctrl = LoopController(
+        queue=q,
+        runner=runner,
+        validators=[_make_passing_validator("lint"), _make_passing_validator("tests")],
+        storage_dir=tmp_path / "storage",
+        workspace=tmp_path,
+        auto_commit=False,
+        verbose=True,
+    )
+    ctrl.run()
+    out = capsys.readouterr().out
+    # Task header, agent invocation, validator section, completion line.
+    assert "[task P0-01]" in out
+    assert "iteration 1" in out
+    assert "agent: echo" in out
+    assert "validators (2):" in out
+    assert "lint" in out and "tests" in out
+    assert "task complete" in out
+
+
+def test_loop_controller_quiet_by_default(
+    tmp_path: Path, tmp_tasks: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    tasks_file, status_file = tmp_tasks
+    q = TaskQueue(tasks_file=tasks_file, status_file=status_file)
+    runner = AgentRunner(workspace=tmp_path, agent_cmd=["echo"])
+
+    ctrl = LoopController(
+        queue=q,
+        runner=runner,
+        validators=[_make_passing_validator()],
+        storage_dir=tmp_path / "storage",
+        workspace=tmp_path,
+        auto_commit=False,
+    )
+    ctrl.run()
+    out = capsys.readouterr().out
+    assert "[task" not in out
+    assert "iteration" not in out

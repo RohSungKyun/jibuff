@@ -6,12 +6,45 @@ Non-interactive / MCP mode: returns the issue body for the caller to handle.
 
 from __future__ import annotations
 
+import functools
 import subprocess
 from pathlib import Path
 
 import typer
 
 from orchestrator.task_queue import Task
+
+
+@functools.lru_cache(maxsize=1)
+def _check_gh_ready() -> bool:
+    """Check whether `gh` CLI is installed and authenticated.
+
+    Result is cached for the process lifetime — escalation prompts run many
+    times per session, and re-checking on every failure is wasteful. Tests
+    that need a fresh check can call ``_check_gh_ready.cache_clear()``.
+
+    On the first call when the check fails, a one-time hint is printed so
+    the user knows escalation is being skipped (and how to enable it).
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        ready = result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        ready = False
+
+    if not ready:
+        typer.echo(
+            "[jibuff] Note: `gh` CLI not available or not authenticated — "
+            "issue escalation prompts will be skipped this session.\n"
+            "  Install: https://cli.github.com/  |  Auth: gh auth login",
+            err=True,
+        )
+    return ready
 
 
 def build_issue_body(
@@ -87,6 +120,9 @@ def prompt_escalation(
     for gate, error in last_errors.items():
         typer.echo(f"  [{gate}] {error.strip()[:100]}")
 
+    if not _check_gh_ready():
+        return None
+
     try:
         answer = typer.prompt("\nCreate a GitHub issue for this failure? [y/N]", default="n")
         answer = answer.strip().lower()
@@ -100,7 +136,7 @@ def prompt_escalation(
         if url:
             typer.echo(f"[jibuff] Issue created: {url}")
         else:
-            typer.echo("[jibuff] Failed to create issue (is `gh` CLI installed and authenticated?)")
+            typer.echo("[jibuff] Failed to create issue — gh CLI errored mid-run.")
         return url
 
     return None

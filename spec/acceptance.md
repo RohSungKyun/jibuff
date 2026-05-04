@@ -16,7 +16,7 @@
 
 ## Phase 1 — Interview Layer
 
-- [ ] `InterviewEngine` produces at least 3 relevant clarifying questions from a one-sentence input
+- [ ] `InterviewEngine` produces one focused clarifying question per round with a/b/c choices and direct-input support
 - [ ] Stage 1 scorer correctly flags missing mandatory keywords (user type, failure conditions, environment)
 - [ ] Stage 2 scorer detects at least one intentionally planted contradiction in test fixtures
 - [ ] Stage 3 scorer produces a float in [0.0, 1.0] for each dimension with temperature=0 reproducibility

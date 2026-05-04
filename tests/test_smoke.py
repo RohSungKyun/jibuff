@@ -19,7 +19,7 @@ def test_rtc_mode_thresholds() -> None:
     cfg = get_mode("rtc")
     assert cfg.ambiguity_threshold == 0.15
     assert cfg.risk_gate == 0.4
-    assert cfg.max_interview_rounds == 15
+    assert cfg.max_interview_rounds == 8
 
 
 def test_unknown_mode_raises() -> None:

@@ -57,7 +57,7 @@ Lightweight mode for well-understood, low-risk tasks.
 ### rtc
 High-intensity mode for real-time communication features.
 
-- Full interview (up to 15 questions)
+- Full interview (up to 8 rounds)
 - Ambiguity threshold: <= 0.15
 - Risk level gate: must score < 3 to proceed
 - QA gate: all quick gates + device compatibility + network simulation + fallback verification + firewall/proxy handling

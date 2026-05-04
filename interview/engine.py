@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from dataclasses import dataclass, field
 
 import openai
@@ -24,6 +25,14 @@ from .ambiguity import (
     check_keyword_coverage,
 )
 from .risk import RiskDimensions, RiskResult
+
+_CHOICE_LINE_RE = re.compile(r"^\s*([abc])[\).:-]\s*(.+)$", flags=re.IGNORECASE)
+_CHOICE_INPUT_RE = re.compile(r"^\s*([a-z])\s*[\).:-]?\s*$", flags=re.IGNORECASE)
+_DEFAULT_CHOICES = {
+    "a": "Use the most common/default assumption",
+    "b": "Keep this out of scope for now",
+    "c": "Not sure yet; mark it as an open issue",
+}
 
 # ---------------------------------------------------------------------------
 # Prompts
@@ -42,10 +51,12 @@ Missing or unclear dimensions: {missing}
 Weakest clarity dimensions (if scored): {weak_dims}
 
 Your job:
-- Ask 1–3 focused clarifying questions targeting the missing/weak dimensions above.
+- Ask exactly 1 focused clarifying question targeting the missing/weak dimensions above.
 - Never suggest solutions or write code.
 - Questions must be specific, not generic.
-- Output ONLY the questions, one per line, no preamble.
+- Provide three short answer choices labeled "a)", "b)", and "c)".
+- Include one final line: "직접 입력: <type a custom answer if none fit>"
+- Output ONLY this 5-line block, no preamble.
 """
 
 _CONTRADICTION_PROMPT = """\
@@ -118,6 +129,69 @@ Respond ONLY with valid JSON matching this exact schema:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class QuestionBlock:
+    question: str
+    choices: dict[str, str]
+    custom_label: str = "직접 입력"
+
+    @classmethod
+    def from_text(cls, raw: str) -> QuestionBlock:
+        """Parse one LLM-produced question block into structured choices."""
+        lines = [line.strip() for line in raw.splitlines() if line.strip()]
+        question_lines: list[str] = []
+        choices: dict[str, str] = {}
+        custom_label = "직접 입력"
+
+        for line in lines:
+            choice_match = _CHOICE_LINE_RE.match(line)
+            if choice_match:
+                choices[choice_match.group(1).lower()] = choice_match.group(2).strip()
+                continue
+
+            if line.startswith("직접 입력"):
+                custom_label = line
+                continue
+
+            if not choices:
+                question_lines.append(line)
+
+        if not question_lines:
+            question_lines = [lines[0]] if lines else ["What should be clarified next?"]
+
+        for key, value in _DEFAULT_CHOICES.items():
+            choices.setdefault(key, value)
+
+        return cls(
+            question=" ".join(question_lines).strip(),
+            choices=choices,
+            custom_label=custom_label,
+        )
+
+    def render(self) -> str:
+        lines = [self.question]
+        for key in ("a", "b", "c"):
+            if key in self.choices:
+                lines.append(f"{key}) {self.choices[key]}")
+        lines.append(self.custom_label)
+        return "\n".join(lines)
+
+    def resolve_answer(self, answer: str) -> str | None:
+        """Return normalized answer text, or None when a selection is invalid."""
+        cleaned = answer.strip()
+        if not cleaned:
+            return None
+
+        choice_match = _CHOICE_INPUT_RE.fullmatch(cleaned)
+        if choice_match:
+            selected = choice_match.group(1).lower()
+            if selected in self.choices:
+                return f"Selected {selected}: {self.choices[selected]}"
+            return None
+
+        return cleaned
+
+
 @dataclass
 class InterviewSession:
     mode: ModeConfig
@@ -126,6 +200,7 @@ class InterviewSession:
     transcript: list[dict[str, str]] = field(default_factory=list)  # [{role, content}]
     last_ambiguity: AmbiguityResult | None = None
     last_risk: RiskResult | None = None
+    pending_question: QuestionBlock | None = None
     complete: bool = False
 
     def full_text(self) -> str:
@@ -171,8 +246,14 @@ class InterviewEngine:
         - If user_answer is provided, record it and re-score.
         - Returns a list of follow-up questions (empty if session is complete).
         """
-        if user_answer:
-            session.transcript.append({"role": "user", "content": user_answer})
+        if user_answer is not None:
+            if not self.validate_user_answer(session, user_answer):
+                raise ValueError("Invalid answer. Choose a/b/c or type a custom answer.")
+            session.transcript.append({
+                "role": "user",
+                "content": self._normalize_user_answer(session, user_answer),
+            })
+            session.pending_question = None
 
         # Stage 1: keyword coverage
         stage1 = check_keyword_coverage(session.full_text(), mode=self.mode_cfg.name)
@@ -240,7 +321,48 @@ class InterviewEngine:
             weak_dims=", ".join(weak_dims) if weak_dims else "none",
         )
         raw = self._call(prompt)
-        return [q.strip() for q in raw.splitlines() if q.strip()]
+        block = self._first_question_block(raw)
+        if not block:
+            session.pending_question = None
+            return []
+        question = QuestionBlock.from_text(block)
+        session.pending_question = question
+        return [question.render()]
+
+    def _first_question_block(self, raw: str) -> str:
+        """Keep the interview readable by showing one question block per round."""
+        lines = [line.strip() for line in raw.splitlines() if line.strip()]
+        if not lines:
+            return ""
+
+        block = [lines[0]]
+        seen_choice = False
+        for line in lines[1:]:
+            if _CHOICE_LINE_RE.match(line):
+                block.append(line)
+                seen_choice = True
+                continue
+            if line.startswith("직접 입력"):
+                block.append(line)
+                break
+            if not seen_choice:
+                break
+
+        return "\n".join(block)
+
+    def _normalize_user_answer(self, session: InterviewSession, answer: str) -> str:
+        """Expand a/b/c answers to the selected option text for later scoring."""
+        if session.pending_question:
+            normalized = session.pending_question.resolve_answer(answer)
+            return normalized if normalized is not None else answer.strip()
+
+        return answer.strip()
+
+    def validate_user_answer(self, session: InterviewSession, answer: str) -> bool:
+        """Validate selection-like answers while allowing direct typed answers."""
+        if not session.pending_question:
+            return bool(answer.strip())
+        return session.pending_question.resolve_answer(answer) is not None
 
     async def _detect_contradictions(self, text: str) -> list[str]:
         prompt = _CONTRADICTION_PROMPT.format(requirements=text)

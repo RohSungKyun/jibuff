@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from interview.engine import InterviewSession, QuestionBlock
 from jibuff_mcp.server import (
     TOOLS,
     handle_cancel,
@@ -86,17 +89,142 @@ def test_interview_rtc_mode() -> None:
     assert "0.15" in result
 
 
-def test_interview_with_answer() -> None:
-    engine = _mock_engine(["Next question?"])
-    with patch("interview.engine.InterviewEngine", return_value=engine):
-        result = asyncio.run(
-            handle_interview({
-                "request": "build something",
-                "answer": "admin users only",
+def test_interview_answer_requires_session_id() -> None:
+    result = asyncio.run(handle_interview({
+        "request": "build something",
+        "answer": "admin users only",
+    }))
+    assert "session_id" in result
+    assert "required" in result.lower()
+
+
+def test_interview_rejects_invalid_session_id(tmp_path: Path) -> None:
+    result = asyncio.run(handle_interview({
+        "session_id": "../bad",
+        "revision": 1,
+        "answer": "b",
+        "workspace": str(tmp_path),
+    }))
+    assert "invalid 'session_id'" in result
+
+
+def test_interview_cleans_broken_expired_session_file(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / ".jibuff" / "mcp" / "interviews"
+    sessions_dir.mkdir(parents=True)
+    broken = sessions_dir / "broken.md"
+    orphan_lock = sessions_dir / "orphan.lock"
+    broken.write_text("not a jibuff session\n", encoding="utf-8")
+    orphan_lock.write_text("", encoding="utf-8")
+    old = time.time() - (25 * 60 * 60)
+    os.utime(broken, (old, old))
+
+    result = asyncio.run(handle_interview({"workspace": str(tmp_path)}))
+
+    assert "required" in result.lower()
+    assert not broken.exists()
+    assert not orphan_lock.exists()
+
+
+def _response_value(response: str, key: str) -> str:
+    prefix = f"{key}: "
+    return next(
+        line.removeprefix(prefix)
+        for line in response.splitlines()
+        if line.startswith(prefix)
+    )
+
+
+def test_interview_mcp_session_file_roundtrip(tmp_path: Path) -> None:
+    class FakeEngine:
+        def __init__(self, mode: str = "quick") -> None:
+            self.mode = mode
+
+        def start(self, request: str) -> InterviewSession:
+            from orchestrator.config import get_mode
+
+            return InterviewSession(mode=get_mode(self.mode), original_request=request)
+
+        async def step(
+            self,
+            session: InterviewSession,
+            user_answer: str | None = None,
+        ) -> list[str]:
+            if user_answer and session.pending_question:
+                session.transcript.append({
+                    "role": "user",
+                    "content": session.pending_question.resolve_answer(user_answer) or "",
+                })
+                session.pending_question = None
+
+            session.pending_question = QuestionBlock.from_text(
+                "Who is the user?\n"
+                "a) Admin\n"
+                "b) Guest\n"
+                "c) Operator\n"
+                "직접 입력: custom"
+            )
+            session.transcript.append({
+                "role": "assistant",
+                "content": session.pending_question.render(),
             })
-        )
-    # answer is recorded in transcript; result should show a question round
-    assert "question" in result.lower() or "round" in result.lower()
+            session.rounds += 1
+            return [session.pending_question.render()]
+
+        def generate_tasks_md(self, session: InterviewSession) -> str:
+            return "- [ ] P0-01: scaffold"
+
+    with patch("interview.engine.InterviewEngine", FakeEngine):
+        first = asyncio.run(handle_interview({
+            "request": "build a task CLI",
+            "workspace": str(tmp_path),
+        }))
+
+    session_id = _response_value(first, "session_id")
+    revision = int(_response_value(first, "revision"))
+    state_file = tmp_path / ".jibuff" / "mcp" / "interviews" / f"{session_id}.md"
+    assert state_file.exists()
+
+    with patch("interview.engine.InterviewEngine", FakeEngine):
+        conflict = asyncio.run(handle_interview({
+            "session_id": session_id,
+            "revision": revision + 99,
+            "answer": "b",
+            "workspace": str(tmp_path),
+        }))
+    assert "revision conflict" in conflict
+
+    missing_revision = asyncio.run(handle_interview({
+        "session_id": session_id,
+        "answer": "b",
+        "workspace": str(tmp_path),
+    }))
+    assert "'revision' is required" in missing_revision
+
+    invalid_revision = asyncio.run(handle_interview({
+        "session_id": session_id,
+        "revision": "latest",
+        "answer": "b",
+        "workspace": str(tmp_path),
+    }))
+    assert "'revision' must be an integer" in invalid_revision
+
+    with patch("interview.engine.InterviewEngine", FakeEngine):
+        second = asyncio.run(handle_interview({
+            "session_id": session_id,
+            "revision": revision,
+            "answer": "b",
+            "workspace": str(tmp_path),
+        }))
+    assert _response_value(second, "revision") == "2"
+    assert state_file.exists()
+
+    cancelled = asyncio.run(handle_interview({
+        "session_id": session_id,
+        "action": "cancel",
+        "workspace": str(tmp_path),
+    }))
+    assert "cancelled" in cancelled
+    assert not state_file.exists()
 
 
 # ---------------------------------------------------------------------------

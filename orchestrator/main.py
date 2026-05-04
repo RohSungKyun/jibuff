@@ -65,10 +65,14 @@ def interview(
 
     while questions:
         for q in questions:
-            typer.echo(f"  {q}")
+            for line in q.splitlines():
+                typer.echo(f"  {line}")
         typer.echo("")
 
-        answer = typer.prompt("Your answer")
+        answer = typer.prompt("Choose a/b/c or type your own answer")
+        while not engine.validate_user_answer(session, answer):
+            typer.echo("Invalid choice. Enter a, b, c, or type a custom answer.", err=True)
+            answer = typer.prompt("Choose a/b/c or type your own answer")
         typer.echo("")
         questions = asyncio.run(engine.step(session, user_answer=answer))
 

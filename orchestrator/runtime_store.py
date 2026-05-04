@@ -35,6 +35,10 @@ class RuntimeClaimError(RuntimeError):
     """Raised when a runtime task claim or transition is no longer valid."""
 
 
+class RuntimeRunActiveError(RuntimeError):
+    """Raised when a workspace already has an active runtime run."""
+
+
 class RuntimeStore:
     """File-backed run state for future parallel workers.
 
@@ -58,58 +62,67 @@ class RuntimeStore:
         mode: str,
         worker_count: int = 1,
     ) -> RuntimeStore:
-        run_id = _new_run_id()
-        store = cls(workspace, run_id)
-        store._init_dirs()
-        now = _utc_timestamp()
-        manifest = {
-            "schema_version": SCHEMA_VERSION,
-            "run_id": run_id,
-            "mode": mode,
-            "workspace": str(workspace),
-            "status": "running",
-            "created_at": now,
-            "updated_at": now,
-            "worker_count": worker_count,
-        }
-        store._write_json(store.manifest_path, manifest)
-        for task in tasks:
+        with _workspace_run_lock(workspace):
+            active = cls.active(workspace, running_only=True)
+            if active is not None:
+                raise RuntimeRunActiveError(
+                    f"workspace already has an active run: {active.run_id}"
+                )
+            run_id = _new_run_id()
+            store = cls(workspace, run_id)
+            store._init_dirs()
+            now = _utc_timestamp()
+            manifest = {
+                "schema_version": SCHEMA_VERSION,
+                "run_id": run_id,
+                "mode": mode,
+                "workspace": str(workspace),
+                "status": "running",
+                "created_at": now,
+                "updated_at": now,
+                "worker_count": worker_count,
+            }
+            store._write_json(store.manifest_path, manifest)
+            for task in tasks:
+                store._write_json(
+                    store.task_path(task.id),
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "id": task.id,
+                        "description": task.description,
+                        "status": task.status,
+                        "revision": task.revision,
+                        "claimed_by": task.claimed_by,
+                        "claim_token": task.claim_token,
+                        "claimed_at": task.claimed_at,
+                        "heartbeat_at": task.heartbeat_at,
+                        "started_at": None,
+                        "completed_at": None,
+                        "last_error": None,
+                    },
+                )
+            for index in range(worker_count):
+                worker_id = f"worker-{index + 1}"
+                store._write_json(
+                    store.worker_path(worker_id),
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "id": worker_id,
+                        "kind": "agent",
+                        "status": "idle",
+                        "current_task_id": None,
+                        "pid": os.getpid(),
+                        "started_at": now,
+                        "heartbeat_at": now,
+                        "last_seen_at": now,
+                    },
+                )
             store._write_json(
-                store.task_path(task.id),
-                {
-                    "schema_version": SCHEMA_VERSION,
-                    "id": task.id,
-                    "description": task.description,
-                    "status": task.status,
-                    "revision": task.revision,
-                    "claimed_by": task.claimed_by,
-                    "claim_token": task.claim_token,
-                    "claimed_at": task.claimed_at,
-                    "heartbeat_at": task.heartbeat_at,
-                    "started_at": None,
-                    "completed_at": None,
-                    "last_error": None,
-                },
+                store.active_run_path(workspace),
+                {"run_id": run_id},
             )
-        for index in range(worker_count):
-            worker_id = f"worker-{index + 1}"
-            store._write_json(
-                store.worker_path(worker_id),
-                {
-                    "schema_version": SCHEMA_VERSION,
-                    "id": worker_id,
-                    "kind": "agent",
-                    "status": "idle",
-                    "current_task_id": None,
-                    "pid": os.getpid(),
-                    "started_at": now,
-                    "heartbeat_at": now,
-                    "last_seen_at": now,
-                },
-            )
-        store._write_json(store.active_run_path(workspace), {"run_id": run_id})
-        store.append_event("run_started", {"mode": mode, "worker_count": worker_count})
-        return store
+            store.append_event("run_started", {"mode": mode, "worker_count": worker_count})
+            return store
 
     @classmethod
     def active(cls, workspace: Path, *, running_only: bool = True) -> RuntimeStore | None:
@@ -432,6 +445,21 @@ def _read_json(path: Path) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+@contextlib.contextmanager
+def _workspace_run_lock(workspace: Path):  # type: ignore[no-untyped-def]
+    lock_dir = workspace / ".jibuff" / "runs"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / "run.lock"
+    with lock_path.open("w", encoding="utf-8") as lock_file:
+        if _fcntl is not None:
+            _fcntl.flock(lock_file.fileno(), _fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if _fcntl is not None:
+                _fcntl.flock(lock_file.fileno(), _fcntl.LOCK_UN)
 
 
 def _is_stale_task(state: dict[str, object], cutoff: datetime) -> bool:

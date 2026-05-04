@@ -4,7 +4,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from orchestrator.runtime_store import RuntimeClaimError, RuntimeStore
+from orchestrator.runtime_store import RuntimeClaimError, RuntimeRunActiveError, RuntimeStore
 from orchestrator.task_queue import Task
 
 
@@ -58,6 +58,18 @@ def test_runtime_store_active_ignores_finished_run(tmp_path: Path) -> None:
     assert RuntimeStore.active(tmp_path) is None
     assert RuntimeStore.active(tmp_path, running_only=False) is None
     assert RuntimeStore.latest(tmp_path) is not None
+
+
+def test_runtime_store_rejects_second_active_run(tmp_path: Path) -> None:
+    task = Task(id="P0-01", description="first task", status="todo")
+    first = RuntimeStore.start(tmp_path, [task], mode="quick")
+
+    try:
+        RuntimeStore.start(tmp_path, [task], mode="quick")
+    except RuntimeRunActiveError as exc:
+        assert first.run_id in str(exc)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("second active run should fail")
 
 
 def test_runtime_store_recover_skips_fresh_heartbeat(tmp_path: Path) -> None:

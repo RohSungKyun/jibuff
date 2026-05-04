@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -13,6 +14,14 @@ class Task:
     id: str        # e.g. "P2-01"
     description: str
     status: str    # "todo" | "in_progress" | "done" | "blocked"
+    revision: int = 0
+    claimed_by: str | None = None
+    claimed_at: str | None = None
+    claim_token: str | None = None
+
+
+class TaskClaimError(RuntimeError):
+    """Raised when a task status mutation uses a stale claim token."""
 
 
 @dataclass
@@ -36,15 +45,25 @@ class TaskQueue:
                 return task
         return None
 
-    def mark_done(self, task_id: str) -> None:
-        self._update_status(task_id, "done")
+    def mark_done(self, task_id: str, claim_token: str | None = None) -> None:
+        self._require_claim(task_id, claim_token)
+        self._update_status(task_id, "done", clear_claim=True)
 
-    def mark_in_progress(self, task_id: str) -> None:
-        self._update_status(task_id, "in_progress")
+    def mark_in_progress(self, task_id: str, claimed_by: str = "jibuff-run") -> str:
+        token = f"{task_id}:{self._utc_timestamp()}"
+        self._update_status(
+            task_id,
+            "in_progress",
+            claimed_by=claimed_by,
+            claimed_at=self._utc_timestamp(),
+            claim_token=token,
+        )
+        return token
 
-    def requeue(self, task_id: str) -> None:
+    def requeue(self, task_id: str, claim_token: str | None = None) -> None:
         """Reset an in_progress task back to todo for re-execution."""
-        self._update_status(task_id, "todo")
+        self._require_claim(task_id, claim_token)
+        self._update_status(task_id, "todo", clear_claim=True)
 
     def all_done(self) -> bool:
         return all(t.status == "done" for t in self._tasks)
@@ -87,29 +106,68 @@ class TaskQueue:
             data = json.loads(self.status_file.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             return
-        overrides: dict[str, str] = {
-            entry["id"]: entry["status"]
+        overrides = {
+            entry["id"]: entry
             for entry in data.get("tasks", [])
-            if "id" in entry and "status" in entry
+            if isinstance(entry, dict) and "id" in entry and "status" in entry
         }
         for task in self._tasks:
             if task.id in overrides:
-                task.status = overrides[task.id]
+                entry = overrides[task.id]
+                task.status = str(entry["status"])
+                task.revision = int(entry.get("revision", 0))
+                task.claimed_by = self._optional_str(entry.get("claimed_by"))
+                task.claimed_at = self._optional_str(entry.get("claimed_at"))
+                task.claim_token = self._optional_str(entry.get("claim_token"))
 
-    def _update_status(self, task_id: str, new_status: str) -> None:
+    def _update_status(
+        self,
+        task_id: str,
+        new_status: str,
+        *,
+        claimed_by: str | None = None,
+        claimed_at: str | None = None,
+        claim_token: str | None = None,
+        clear_claim: bool = False,
+    ) -> None:
         for task in self._tasks:
             if task.id == task_id:
                 task.status = new_status
+                task.revision += 1
+                if clear_claim:
+                    task.claimed_by = None
+                    task.claimed_at = None
+                    task.claim_token = None
+                else:
+                    task.claimed_by = claimed_by
+                    task.claimed_at = claimed_at
+                    task.claim_token = claim_token
                 break
         self._flush_status_file()
 
     def _flush_status_file(self) -> None:
         data = {
-            "version": "0.1.0",
-            "tasks": [{"id": t.id, "status": t.status, "description": t.description}
-                      for t in self._tasks],
+            "version": "0.2.0",
+            "tasks": [asdict(t) for t in self._tasks],
         }
         self.status_file.write_text(
             json.dumps(data, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+
+    def _require_claim(self, task_id: str, claim_token: str | None) -> None:
+        if claim_token is None:
+            return
+        for task in self._tasks:
+            if task.id == task_id:
+                if task.claim_token != claim_token:
+                    raise TaskClaimError(f"stale claim token for task {task_id}")
+                return
+
+    @staticmethod
+    def _utc_timestamp() -> str:
+        return datetime.now(tz=UTC).isoformat()
+
+    @staticmethod
+    def _optional_str(value: object) -> str | None:
+        return value if isinstance(value, str) else None

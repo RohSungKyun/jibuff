@@ -73,7 +73,7 @@ class LoopController:
                 break
 
             result.total_iterations += 1
-            self.queue.mark_in_progress(task.id)
+            claim_token = self.queue.mark_in_progress(task.id)
             write_progress(self.queue, self.storage_dir)
 
             iter_start = time.monotonic()
@@ -87,7 +87,7 @@ class LoopController:
 
                 if run.returncode == -1 and "not found" in run.stderr:
                     result.stopped_reason = "agent_unavailable"
-                    self.queue.requeue(task.id)
+                    self.queue.requeue(task.id, claim_token=claim_token)
                     write_trace(
                         task, success=False, duration_seconds=duration,
                         stopped_reason="agent_unavailable",
@@ -101,7 +101,7 @@ class LoopController:
                     storage_dir=self.storage_dir,
                 )
                 result.failed_tasks.append(task.id)
-                self.queue.requeue(task.id)
+                self.queue.requeue(task.id, claim_token=claim_token)
                 write_progress(self.queue, self.storage_dir)
                 write_trace(
                     task, success=False, duration_seconds=duration,
@@ -127,7 +127,7 @@ class LoopController:
                     storage_dir=self.storage_dir,
                 )
                 result.failed_tasks.append(task.id)
-                self.queue.requeue(task.id)
+                self.queue.requeue(task.id, claim_token=claim_token)
                 write_progress(self.queue, self.storage_dir)
                 write_trace(
                     task, success=False, duration_seconds=duration,
@@ -161,7 +161,7 @@ class LoopController:
                         quality_retries[task.id] = retries + 1
                         failure_context = quality.context()
                         result.failed_tasks.append(task.id)
-                        self.queue.requeue(task.id)
+                        self.queue.requeue(task.id, claim_token=claim_token)
                         write_progress(self.queue, self.storage_dir)
                         write_trace(
                             task, success=False, duration_seconds=duration,
@@ -178,7 +178,7 @@ class LoopController:
             quality_retries.pop(task.id, None)
             consecutive_failures.pop(task.id, None)
             last_errors.pop(task.id, None)
-            self.queue.mark_done(task.id)
+            self.queue.mark_done(task.id, claim_token=claim_token)
             result.completed_tasks.append(task.id)
             write_progress(self.queue, self.storage_dir)
             write_trace(

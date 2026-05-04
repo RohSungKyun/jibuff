@@ -11,7 +11,7 @@ import pytest
 
 from orchestrator.agent_runner import AgentRunner, resolve_agent_cmd
 from orchestrator.loop_controller import LoopController, ValidatorProtocol
-from orchestrator.task_queue import Task, TaskQueue
+from orchestrator.task_queue import Task, TaskClaimError, TaskQueue
 from reporters.failure_report import write_failure_report
 from reporters.progress import write_progress
 
@@ -86,6 +86,43 @@ def test_task_queue_mark_done_persists(tmp_tasks: tuple[Path, Path]) -> None:
     q2 = TaskQueue(tasks_file=tasks_file, status_file=status_file)
     statuses = {t.id: t.status for t in q2._tasks}
     assert statuses["P0-01"] == "done"
+
+
+def test_task_queue_claim_metadata_persists(tmp_tasks: tuple[Path, Path]) -> None:
+    tasks_file, status_file = tmp_tasks
+    q = TaskQueue(tasks_file=tasks_file, status_file=status_file)
+    token = q.mark_in_progress("P0-01", claimed_by="worker-1")
+
+    q2 = TaskQueue(tasks_file=tasks_file, status_file=status_file)
+    task = next(t for t in q2._tasks if t.id == "P0-01")
+    assert task.status == "in_progress"
+    assert task.revision == 1
+    assert task.claimed_by == "worker-1"
+    assert task.claimed_at is not None
+    assert task.claim_token == token
+
+
+def test_task_queue_requeue_clears_claim(tmp_tasks: tuple[Path, Path]) -> None:
+    tasks_file, status_file = tmp_tasks
+    q = TaskQueue(tasks_file=tasks_file, status_file=status_file)
+    q.mark_in_progress("P0-01", claimed_by="worker-1")
+    q.requeue("P0-01")
+
+    q2 = TaskQueue(tasks_file=tasks_file, status_file=status_file)
+    task = next(t for t in q2._tasks if t.id == "P0-01")
+    assert task.status == "todo"
+    assert task.revision == 2
+    assert task.claimed_by is None
+    assert task.claim_token is None
+
+
+def test_task_queue_rejects_stale_claim_token(tmp_tasks: tuple[Path, Path]) -> None:
+    tasks_file, status_file = tmp_tasks
+    q = TaskQueue(tasks_file=tasks_file, status_file=status_file)
+    q.mark_in_progress("P0-01", claimed_by="worker-1")
+
+    with pytest.raises(TaskClaimError, match="stale claim"):
+        q.mark_done("P0-01", claim_token="wrong-token")
 
 
 def test_task_queue_requeue_resets_to_todo(tmp_tasks: tuple[Path, Path]) -> None:
@@ -239,7 +276,7 @@ def test_loop_controller_all_done_on_success(
     )
     result = ctrl.run()
     # todo tasks (P0-01, P0-02) should be completed; in_progress/blocked are not processed
-    assert result.stopped_reason == "all_done"
+    assert result.stopped_reason == "no_runnable_tasks"
     assert len(result.completed_tasks) == 2
     assert q.next() is None  # no more todo tasks
 

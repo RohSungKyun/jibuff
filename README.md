@@ -93,6 +93,17 @@ JIBUFF_AGENT_CMD="codex exec" jb run     # or set globally via env var
 # Check current loop state
 jb status
 
+# Diagnose and inspect runtime state
+jb doctor
+jb inspect
+jb recover
+jb recover --stale-after-minutes 10
+jb recover --force
+jb cleanup
+
+# Install a thin Codex skill wrapper for in-session discovery
+jb setup-skill
+
 # (jibuff is also available as a full-name alias)
 jibuff --help
 ```
@@ -148,6 +159,45 @@ your-project/
     ├── issues/            # Open issues by task ID
     └── last_failure.md    # Last agent failure report
 ```
+
+Task status entries also carry `revision`, `claimed_by`, `claimed_at`, and
+`claim_token` metadata as a compatibility mirror. Runtime source-of-truth lives
+under `.jibuff/runs/<run_id>/`, with task and worker state split into separate
+JSON files so future parallel workers do not contend on a single status file.
+
+```
+your-project/
+└── .jibuff/
+    └── runs/
+        ├── active.json
+        └── <run_id>/
+            ├── manifest.json
+            ├── tasks/
+            │   └── P0-01.json
+            ├── workers/
+            │   └── worker-1.json
+            ├── events.jsonl
+            └── locks/
+```
+
+Each in-progress task carries `claimed_at` and `heartbeat_at`. `jb recover`
+requeues only stale tasks by default; recent heartbeats are skipped unless
+`--force` is passed.
+
+MCP interview sessions are stored under:
+
+```
+your-project/
+└── .jibuff/
+    └── mcp/
+        └── interviews/
+            ├── <session_id>.md
+            └── <session_id>.lock
+```
+
+`jb inspect` shows these sessions. `jb cleanup` removes expired sessions and
+orphan locks. `jb recover` requeues stale in-progress tasks after an interrupted
+run.
 
 `tasks.md` uses a simple marker syntax:
 

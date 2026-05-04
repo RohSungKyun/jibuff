@@ -199,6 +199,7 @@ def run(
         max_quality_retries=cfg.max_quality_retries,
         escalation_handler=prompt_escalation,
         escalation_threshold=3,
+        mode=mode,
         verbose=verbose,
     )
 
@@ -222,6 +223,12 @@ def run(
             err=True,
         )
         raise typer.Exit(1)
+    if result.stopped_reason == "no_runnable_tasks":
+        typer.echo(
+            "\nNo todo tasks are runnable. If a previous run was interrupted, "
+            "run 'jb recover' after confirming no active jibuff run is still working.",
+            err=True,
+        )
 
 
 @app.command()
@@ -251,6 +258,157 @@ def status(
     last_failure = ws / "storage" / "last_failure.md"
     if last_failure.exists():
         typer.echo("  last failure: present")
+
+
+@app.command()
+def doctor(
+    workspace: Annotated[str, typer.Option(help="Workspace directory (default: cwd)")] = "",
+) -> None:
+    """Check local jibuff readiness and common runtime prerequisites."""
+    ws = Path(workspace) if workspace else Path.cwd()
+    from orchestrator.ops import run_doctor
+
+    checks = run_doctor(ws)
+    typer.echo("[jibuff doctor]")
+    failed = 0
+    for check in checks:
+        marker = "OK" if check.ok else "WARN"
+        if not check.ok and check.required:
+            marker = "FAIL"
+            failed += 1
+        typer.echo(f"  [{marker}] {check.name}: {check.detail}")
+    if failed:
+        raise typer.Exit(1)
+
+
+@app.command()
+def inspect(
+    workspace: Annotated[str, typer.Option(help="Workspace directory (default: cwd)")] = "",
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON"),
+    ] = False,
+) -> None:
+    """Inspect tasks, failure artifacts, and MCP interview sessions."""
+    import json
+
+    ws = Path(workspace) if workspace else Path.cwd()
+    from orchestrator.ops import inspect_workspace
+
+    result = inspect_workspace(ws)
+    if json_output:
+        payload = {
+            "workspace": str(result.workspace),
+            "has_tasks": result.has_tasks,
+            "summary": result.summary,
+            "tasks": result.tasks,
+            "last_failure": result.last_failure,
+            "open_issue_count": result.open_issue_count,
+            "interview_sessions": result.interview_sessions,
+            "runtime_run": result.runtime_run,
+        }
+        typer.echo(json.dumps(payload, indent=2, ensure_ascii=False))
+        return
+
+    typer.echo("[jibuff inspect]")
+    typer.echo(f"  workspace: {result.workspace}")
+    if not result.has_tasks:
+        typer.echo("  spec/tasks.md: missing")
+    else:
+        typer.echo(
+            "  tasks: "
+            f"done={result.summary.get('done', 0)} | "
+            f"todo={result.summary.get('todo', 0)} | "
+            f"in_progress={result.summary.get('in_progress', 0)} | "
+            f"blocked={result.summary.get('blocked', 0)}"
+        )
+        for task in result.tasks:
+            claim = ""
+            if task.get("claimed_by"):
+                claim = f" claimed_by={task.get('claimed_by')}"
+            typer.echo(
+                f"    {task['id']} [{task['status']}] "
+                f"rev={task['revision']}{claim} - {task['description']}"
+            )
+    typer.echo(f"  last_failure: {'present' if result.last_failure else 'none'}")
+    typer.echo(f"  open_issues: {result.open_issue_count}")
+    if result.runtime_run:
+        manifest = result.runtime_run.get("manifest", {})
+        workers = result.runtime_run.get("workers", [])
+        run_id = result.runtime_run.get("run_id")
+        typer.echo(f"  runtime_run: {run_id}")
+        if isinstance(manifest, dict):
+            typer.echo(f"    status: {manifest.get('status')}")
+        if isinstance(workers, list):
+            typer.echo(f"    workers: {len(workers)}")
+    typer.echo(f"  mcp_interviews: {len(result.interview_sessions)}")
+    for session in result.interview_sessions:
+        typer.echo(
+            f"    {session['session_id']} status={session['status']} "
+            f"rev={session['revision']} mode={session['mode']}"
+        )
+
+
+@app.command()
+def cleanup(
+    workspace: Annotated[str, typer.Option(help="Workspace directory (default: cwd)")] = "",
+    failures: Annotated[
+        bool,
+        typer.Option("--failures", help="Also remove last_failure.md and open_issues.json"),
+    ] = False,
+) -> None:
+    """Remove expired MCP interview sessions and orphan locks."""
+    ws = Path(workspace) if workspace else Path.cwd()
+    from orchestrator.ops import cleanup_workspace
+
+    removed = cleanup_workspace(ws, include_storage_failures=failures)
+    typer.echo("[jibuff cleanup]")
+    typer.echo(f"  removed: {len(removed)}")
+    for path in removed:
+        typer.echo(f"    {path}")
+
+
+@app.command()
+def recover(
+    workspace: Annotated[str, typer.Option(help="Workspace directory (default: cwd)")] = "",
+    stale_after_minutes: Annotated[
+        int,
+        typer.Option(help="Requeue in-progress tasks with stale heartbeat older than this"),
+    ] = 10,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Requeue all in-progress tasks, even with fresh heartbeat"),
+    ] = False,
+) -> None:
+    """Recover from interrupted runs by requeueing stale in-progress tasks."""
+    ws = Path(workspace) if workspace else Path.cwd()
+    from orchestrator.ops import recover_workspace
+
+    typer.echo("[jibuff recover]")
+    for action in recover_workspace(
+        ws,
+        stale_after_minutes=stale_after_minutes,
+        force=force,
+    ):
+        typer.echo(f"  {action}")
+
+
+@app.command("setup-skill")
+def setup_skill(
+    destination: Annotated[
+        str,
+        typer.Option(
+            help="Codex home directory to install into (default: CODEX_HOME or ~/.codex)"
+        ),
+    ] = "",
+) -> None:
+    """Install a thin jibuff SKILL.md wrapper for Codex skill discovery."""
+    from orchestrator.ops import install_skill
+
+    target = Path(destination) if destination else None
+    skill_file = install_skill(target)
+    typer.echo("[jibuff setup-skill]")
+    typer.echo(f"  installed: {skill_file}")
 
 
 def _detect_jb_command() -> str:

@@ -59,6 +59,11 @@ class LoopController:
     runtime_store: RuntimeStore | None = None
     worker_id: str = DEFAULT_WORKER_ID
     heartbeat_interval_seconds: float = 30.0
+    verbose: bool = False  # emit per-step narration to stderr
+
+    def _log(self, msg: str) -> None:
+        if self.verbose:
+            print(msg, flush=True)
 
     def run(self) -> LoopResult:
         result = LoopResult()
@@ -106,6 +111,19 @@ class LoopController:
                 )
                 write_progress(self.queue, self.storage_dir)
 
+                if self.verbose:
+                    desc = (
+                        task.description
+                        if len(task.description) <= 80
+                        else task.description[:77] + "..."
+                    )
+                    self._log(f"\n├─ [task {task.id}] {desc}")
+                    self._log(f"│  ├─ iteration {result.total_iterations}/{self.max_iterations}")
+                    self._log(
+                        f"│  ├─ agent: {self.runner.agent_cmd[0]} "
+                        f"(timeout {self.runner.timeout_seconds}s)"
+                    )
+
                 with Heartbeat(
                     runtime_store,
                     task.id,
@@ -117,6 +135,12 @@ class LoopController:
 
                     # Execute
                     run = self.runner.run(task, failure_context=failure_context)
+                    if self.verbose:
+                        mark = "✓" if run.success else "✗"
+                        self._log(
+                            f"│  │  └─ {mark} done in {run.duration_seconds:.1f}s "
+                            f"(exit {run.returncode})"
+                        )
 
                     if not run.success:
                         duration = time.monotonic() - iter_start
@@ -160,6 +184,10 @@ class LoopController:
                         # Track consecutive failures for escalation
                         consecutive_failures[task.id] = consecutive_failures.get(task.id, 0) + 1
                         last_errors[task.id] = errors
+                        self._log(
+                            f"│  └─ ↻ retry {consecutive_failures[task.id]}/"
+                            f"{self.escalation_threshold} (agent failure)"
+                        )
                         self._maybe_escalate(
                             task, consecutive_failures, last_errors, result
                         )
@@ -190,6 +218,10 @@ class LoopController:
 
                         consecutive_failures[task.id] = consecutive_failures.get(task.id, 0) + 1
                         last_errors[task.id] = errors
+                        self._log(
+                            f"│  └─ ↻ retry {consecutive_failures[task.id]}/"
+                            f"{self.escalation_threshold} ({len(errors)} validator failure(s))"
+                        )
                         self._maybe_escalate(
                             task, consecutive_failures, last_errors, result
                         )
@@ -227,6 +259,11 @@ class LoopController:
                                     iteration=result.total_iterations,
                                     storage_dir=self.storage_dir,
                                 )
+                                self._log(
+                                    f"│  └─ ↻ ralph retry {quality_retries[task.id]}/"
+                                    f"{self.max_quality_retries} "
+                                    f"(quality {quality_score:.2f})"
+                                )
                                 continue
 
                     # Pass
@@ -251,6 +288,8 @@ class LoopController:
                         storage_dir=self.storage_dir,
                     )
 
+                    self._log(f"│  └─ ✓ task complete in {duration:.1f}s")
+
                     if self.auto_commit:
                         self._git_commit(task)
 
@@ -272,8 +311,22 @@ class LoopController:
     def _run_validators(self) -> dict[str, str]:
         """Run all validators; collect errors from failing ones."""
         errors: dict[str, str] = {}
-        for validator in self.validators:
+        self._log(f"│  ├─ validators ({len(self.validators)}):")
+        for i, validator in enumerate(self.validators):
+            is_last = i == len(self.validators) - 1
+            branch = "└─" if is_last else "├─"
+            t0 = time.monotonic()
             ok, output = validator.run(self.workspace)
+            dt = time.monotonic() - t0
+            mark = "✓" if ok else "✗"
+            tail = ""
+            if not ok:
+                first = next(
+                    (line.strip() for line in output.splitlines() if line.strip()),
+                    "",
+                )
+                tail = f" — {first[:60]}" if first else ""
+            self._log(f"│  │  {branch} {validator.name:<8} {mark} ({dt:.1f}s){tail}")
             if not ok:
                 errors[validator.name] = output
         return errors
@@ -290,6 +343,7 @@ class LoopController:
         if count < self.escalation_threshold or self.escalation_handler is None:
             return
         errors = last_errors.get(task.id, {})
+        self._log(f"│  └─ ⚠ escalating after {count} consecutive failures")
         url = self.escalation_handler(
             task, count, errors, self.workspace
         )

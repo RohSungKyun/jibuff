@@ -121,6 +121,14 @@ def run(
             "Overrides JIBUFF_AGENT_CMD and autodetect.",
         ),
     ] = "",
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            "-v",
+            help="Print per-step narration: task, iteration, agent call, validators.",
+        ),
+    ] = False,
 ) -> None:
     """Run the agent loop against spec/tasks.md until all tasks are done."""
     try:
@@ -192,6 +200,7 @@ def run(
         escalation_handler=prompt_escalation,
         escalation_threshold=3,
         mode=mode,
+        verbose=verbose,
     )
 
     result = controller.run()

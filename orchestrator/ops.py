@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from orchestrator.agent_runner import resolve_agent_cmd
+from orchestrator.runtime_store import DEFAULT_STALE_AFTER_MINUTES, RuntimeStore
 from orchestrator.task_queue import TaskQueue
 
 MCP_INTERVIEW_TTL_HOURS = 24
@@ -53,6 +54,7 @@ class InspectResult:
     last_failure: bool = False
     open_issue_count: int = 0
     interview_sessions: list[dict[str, object]] = field(default_factory=list)
+    runtime_run: dict[str, object] | None = None
 
 
 def run_doctor(workspace: Path) -> list[CheckResult]:
@@ -127,6 +129,9 @@ def inspect_workspace(workspace: Path) -> InspectResult:
     result.last_failure = (storage_dir / "last_failure.md").exists()
     result.open_issue_count = _json_list_len(storage_dir / "open_issues.json")
     result.interview_sessions = list_interview_sessions(workspace)
+    runtime_store = RuntimeStore.active(workspace) or RuntimeStore.latest(workspace)
+    if runtime_store is not None:
+        result.runtime_run = runtime_store.inspect()
     return result
 
 
@@ -146,23 +151,70 @@ def cleanup_workspace(workspace: Path, *, include_storage_failures: bool = False
     return removed
 
 
-def recover_workspace(workspace: Path) -> list[str]:
+def recover_workspace(
+    workspace: Path,
+    *,
+    stale_after_minutes: int = DEFAULT_STALE_AFTER_MINUTES,
+    force: bool = False,
+) -> list[str]:
     tasks_file = workspace / "spec" / "tasks.md"
     status_file = workspace / "storage" / "task_status.json"
     actions: list[str] = []
     if not tasks_file.exists():
         return ["No spec/tasks.md found."]
 
-    queue = TaskQueue(tasks_file=tasks_file, status_file=status_file)
-    for task in list(queue._tasks):
-        if task.status == "in_progress":
-            queue.requeue(task.id)
-            actions.append(f"Requeued stale in-progress task {task.id}.")
+    runtime_store = RuntimeStore.active(workspace) or RuntimeStore.latest(workspace)
+    if runtime_store is not None:
+        report = runtime_store.recover_stale(
+            stale_after_minutes=stale_after_minutes,
+            force=force,
+        )
+        if report.requeued:
+            queue = TaskQueue(tasks_file=tasks_file, status_file=status_file)
+            for task_id in report.requeued:
+                queue.requeue(task_id)
+                actions.append(f"Requeued stale in-progress task {task_id}.")
+        for task_id in report.skipped:
+            actions.append(
+                f"Skipped active/recent in-progress task {task_id}; use --force to requeue."
+            )
+    else:
+        actions.extend(
+            _recover_legacy_task_status(
+                tasks_file,
+                status_file,
+                stale_after_minutes=stale_after_minutes,
+                force=force,
+            )
+        )
 
     removed = cleanup_interview_sessions(workspace)
     if removed:
         actions.append(f"Removed {len(removed)} expired MCP interview files.")
     return actions or ["No recovery action needed."]
+
+
+def _recover_legacy_task_status(
+    tasks_file: Path,
+    status_file: Path,
+    *,
+    stale_after_minutes: int,
+    force: bool,
+) -> list[str]:
+    actions: list[str] = []
+    cutoff = datetime.now(tz=UTC) - timedelta(minutes=stale_after_minutes)
+    queue = TaskQueue(tasks_file=tasks_file, status_file=status_file)
+    for task in list(queue._tasks):
+        if task.status != "in_progress":
+            continue
+        if force or _legacy_task_is_stale(task.heartbeat_at or task.claimed_at, cutoff):
+            queue.requeue(task.id)
+            actions.append(f"Requeued stale in-progress task {task.id}.")
+        else:
+            actions.append(
+                f"Skipped active/recent in-progress task {task.id}; use --force to requeue."
+            )
+    return actions
 
 
 def install_skill(destination: Path | None = None) -> Path:
@@ -257,3 +309,12 @@ def _mtime_before(path: Path, cutoff: datetime) -> bool:
     except FileNotFoundError:
         return False
     return mtime <= cutoff
+
+
+def _legacy_task_is_stale(timestamp: str | None, cutoff: datetime) -> bool:
+    if timestamp is None:
+        return True
+    try:
+        return datetime.fromisoformat(timestamp) <= cutoff
+    except ValueError:
+        return True

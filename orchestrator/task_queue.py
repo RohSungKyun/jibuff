@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,6 +19,7 @@ class Task:
     claimed_by: str | None = None
     claimed_at: str | None = None
     claim_token: str | None = None
+    heartbeat_at: str | None = None
 
 
 class TaskClaimError(RuntimeError):
@@ -29,6 +31,7 @@ class TaskQueue:
     tasks_file: Path
     status_file: Path
     _tasks: list[Task] = field(default_factory=list, init=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._tasks = self._parse_tasks()
@@ -51,12 +54,14 @@ class TaskQueue:
 
     def mark_in_progress(self, task_id: str, claimed_by: str = "jibuff-run") -> str:
         token = f"{task_id}:{self._utc_timestamp()}"
+        now = self._utc_timestamp()
         self._update_status(
             task_id,
             "in_progress",
             claimed_by=claimed_by,
-            claimed_at=self._utc_timestamp(),
+            claimed_at=now,
             claim_token=token,
+            heartbeat_at=now,
         )
         return token
 
@@ -119,6 +124,19 @@ class TaskQueue:
                 task.claimed_by = self._optional_str(entry.get("claimed_by"))
                 task.claimed_at = self._optional_str(entry.get("claimed_at"))
                 task.claim_token = self._optional_str(entry.get("claim_token"))
+                task.heartbeat_at = self._optional_str(entry.get("heartbeat_at"))
+
+    def touch_heartbeat(self, task_id: str, claim_token: str) -> bool:
+        with self._lock:
+            for task in self._tasks:
+                if task.id != task_id:
+                    continue
+                if task.claim_token != claim_token or task.status != "in_progress":
+                    return False
+                task.heartbeat_at = self._utc_timestamp()
+                self._flush_status_file()
+                return True
+        return False
 
     def _update_status(
         self,
@@ -128,28 +146,33 @@ class TaskQueue:
         claimed_by: str | None = None,
         claimed_at: str | None = None,
         claim_token: str | None = None,
+        heartbeat_at: str | None = None,
         clear_claim: bool = False,
     ) -> None:
-        for task in self._tasks:
-            if task.id == task_id:
-                task.status = new_status
-                task.revision += 1
-                if clear_claim:
-                    task.claimed_by = None
-                    task.claimed_at = None
-                    task.claim_token = None
-                else:
-                    task.claimed_by = claimed_by
-                    task.claimed_at = claimed_at
-                    task.claim_token = claim_token
-                break
-        self._flush_status_file()
+        with self._lock:
+            for task in self._tasks:
+                if task.id == task_id:
+                    task.status = new_status
+                    task.revision += 1
+                    if clear_claim:
+                        task.claimed_by = None
+                        task.claimed_at = None
+                        task.claim_token = None
+                        task.heartbeat_at = None
+                    else:
+                        task.claimed_by = claimed_by
+                        task.claimed_at = claimed_at
+                        task.claim_token = claim_token
+                        task.heartbeat_at = heartbeat_at
+                    break
+            self._flush_status_file()
 
     def _flush_status_file(self) -> None:
         data = {
             "version": "0.2.0",
             "tasks": [asdict(t) for t in self._tasks],
         }
+        self.status_file.parent.mkdir(parents=True, exist_ok=True)
         self.status_file.write_text(
             json.dumps(data, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",

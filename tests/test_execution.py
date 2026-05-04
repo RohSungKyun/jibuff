@@ -276,7 +276,7 @@ def test_loop_controller_all_done_on_success(
     )
     result = ctrl.run()
     # todo tasks (P0-01, P0-02) should be completed; in_progress/blocked are not processed
-    assert result.stopped_reason == "all_done"
+    assert result.stopped_reason == "no_runnable_tasks"
     assert len(result.completed_tasks) == 2
     assert q.next() is None  # no more todo tasks
 

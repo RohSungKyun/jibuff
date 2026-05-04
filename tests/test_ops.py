@@ -11,6 +11,8 @@ from orchestrator.ops import (
     install_skill,
     recover_workspace,
 )
+from orchestrator.runtime_store import RuntimeStore
+from orchestrator.task_queue import Task
 
 
 def test_inspect_workspace_reports_tasks_and_failures(tmp_path: Path) -> None:
@@ -54,6 +56,21 @@ def test_recover_workspace_requeues_in_progress_task(tmp_path: Path) -> None:
 
     assert actions == ["Requeued stale in-progress task P0-01."]
     assert result.tasks[0]["status"] == "todo"
+
+
+def test_recover_workspace_skips_active_runtime_task(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "spec"
+    storage_dir = tmp_path / "storage"
+    spec_dir.mkdir()
+    storage_dir.mkdir()
+    (spec_dir / "tasks.md").write_text("- [ ] P0-01: Active task\n", encoding="utf-8")
+    task = Task(id="P0-01", description="Active task", status="todo")
+    store = RuntimeStore.start(tmp_path, [task], mode="quick")
+    store.claim_task(task)
+
+    actions = recover_workspace(tmp_path, stale_after_minutes=10)
+
+    assert actions == ["Skipped active/recent in-progress task P0-01; use --force to requeue."]
 
 
 def test_cleanup_workspace_removes_expired_interview_and_orphan_lock(tmp_path: Path) -> None:

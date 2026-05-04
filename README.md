@@ -97,6 +97,8 @@ jb status
 jb doctor
 jb inspect
 jb recover
+jb recover --stale-after-minutes 10
+jb recover --force
 jb cleanup
 
 # Install a thin Codex skill wrapper for in-session discovery
@@ -159,9 +161,28 @@ your-project/
 ```
 
 Task status entries also carry `revision`, `claimed_by`, `claimed_at`, and
-`claim_token` metadata. The current runner uses these fields for safer recovery
-from interrupted runs; they are also the foundation for future parallel task
-claims.
+`claim_token` metadata as a compatibility mirror. Runtime source-of-truth lives
+under `.jibuff/runs/<run_id>/`, with task and worker state split into separate
+JSON files so future parallel workers do not contend on a single status file.
+
+```
+your-project/
+└── .jibuff/
+    └── runs/
+        ├── active.json
+        └── <run_id>/
+            ├── manifest.json
+            ├── tasks/
+            │   └── P0-01.json
+            ├── workers/
+            │   └── worker-1.json
+            ├── events.jsonl
+            └── locks/
+```
+
+Each in-progress task carries `claimed_at` and `heartbeat_at`. `jb recover`
+requeues only stale tasks by default; recent heartbeats are skipped unless
+`--force` is passed.
 
 MCP interview sessions are stored under:
 

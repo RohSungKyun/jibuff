@@ -191,6 +191,7 @@ def run(
         max_quality_retries=cfg.max_quality_retries,
         escalation_handler=prompt_escalation,
         escalation_threshold=3,
+        mode=mode,
     )
 
     result = controller.run()
@@ -213,6 +214,12 @@ def run(
             err=True,
         )
         raise typer.Exit(1)
+    if result.stopped_reason == "no_runnable_tasks":
+        typer.echo(
+            "\nNo todo tasks are runnable. If a previous run was interrupted, "
+            "run 'jb recover' after confirming no active jibuff run is still working.",
+            err=True,
+        )
 
 
 @app.command()
@@ -289,6 +296,7 @@ def inspect(
             "last_failure": result.last_failure,
             "open_issue_count": result.open_issue_count,
             "interview_sessions": result.interview_sessions,
+            "runtime_run": result.runtime_run,
         }
         typer.echo(json.dumps(payload, indent=2, ensure_ascii=False))
         return
@@ -315,6 +323,15 @@ def inspect(
             )
     typer.echo(f"  last_failure: {'present' if result.last_failure else 'none'}")
     typer.echo(f"  open_issues: {result.open_issue_count}")
+    if result.runtime_run:
+        manifest = result.runtime_run.get("manifest", {})
+        workers = result.runtime_run.get("workers", [])
+        run_id = result.runtime_run.get("run_id")
+        typer.echo(f"  runtime_run: {run_id}")
+        if isinstance(manifest, dict):
+            typer.echo(f"    status: {manifest.get('status')}")
+        if isinstance(workers, list):
+            typer.echo(f"    workers: {len(workers)}")
     typer.echo(f"  mcp_interviews: {len(result.interview_sessions)}")
     for session in result.interview_sessions:
         typer.echo(
@@ -345,13 +362,25 @@ def cleanup(
 @app.command()
 def recover(
     workspace: Annotated[str, typer.Option(help="Workspace directory (default: cwd)")] = "",
+    stale_after_minutes: Annotated[
+        int,
+        typer.Option(help="Requeue in-progress tasks with stale heartbeat older than this"),
+    ] = 10,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Requeue all in-progress tasks, even with fresh heartbeat"),
+    ] = False,
 ) -> None:
     """Recover from interrupted runs by requeueing stale in-progress tasks."""
     ws = Path(workspace) if workspace else Path.cwd()
     from orchestrator.ops import recover_workspace
 
     typer.echo("[jibuff recover]")
-    for action in recover_workspace(ws):
+    for action in recover_workspace(
+        ws,
+        stale_after_minutes=stale_after_minutes,
+        force=force,
+    ):
         typer.echo(f"  {action}")
 
 

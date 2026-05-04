@@ -13,6 +13,7 @@ from reporters.progress import write_progress
 from reporters.tracer import write_trace
 
 from .agent_runner import AgentRunner
+from .runtime_store import DEFAULT_WORKER_ID, Heartbeat, RuntimeStore
 from .task_queue import Task, TaskQueue
 
 
@@ -37,7 +38,7 @@ class LoopResult:
     completed_tasks: list[str] = field(default_factory=list)
     failed_tasks: list[str] = field(default_factory=list)
     total_iterations: int = 0
-    stopped_reason: str = ""  # "all_done" | "max_iterations" | "agent_unavailable"
+    stopped_reason: str = ""  # "all_done" | "max_iterations" | "agent_unavailable" | ...
     escalated_issues: list[str] = field(default_factory=list)  # issue URLs
 
 
@@ -54,6 +55,10 @@ class LoopController:
     max_quality_retries: int = 2
     escalation_handler: EscalationHandler | None = None
     escalation_threshold: int = 3  # consecutive failures before escalation
+    mode: str = "quick"
+    runtime_store: RuntimeStore | None = None
+    worker_id: str = DEFAULT_WORKER_ID
+    heartbeat_interval_seconds: float = 30.0
 
     def run(self) -> LoopResult:
         result = LoopResult()
@@ -61,6 +66,7 @@ class LoopController:
         quality_retries: dict[str, int] = {}
         consecutive_failures: dict[str, int] = {}
         last_errors: dict[str, dict[str, str]] = {}
+        runtime_store = self.runtime_store
 
         while not self.queue.all_done():
             if result.total_iterations >= self.max_iterations:
@@ -69,131 +75,178 @@ class LoopController:
 
             task = self.queue.next()
             if task is None:
-                result.stopped_reason = "all_done"
+                result.stopped_reason = "all_done" if self.queue.all_done() else "no_runnable_tasks"
                 break
 
             result.total_iterations += 1
+            if runtime_store is None:
+                runtime_store = RuntimeStore.start(
+                    self.workspace,
+                    self.queue._tasks,
+                    mode=self.mode,
+                    worker_count=1,
+                )
+                self.runtime_store = runtime_store
             claim_token = self.queue.mark_in_progress(task.id)
+            runtime_store.claim_task(
+                task,
+                worker_id=self.worker_id,
+                claim_token=claim_token,
+            )
             write_progress(self.queue, self.storage_dir)
 
-            iter_start = time.monotonic()
+            with Heartbeat(
+                runtime_store,
+                task.id,
+                claim_token,
+                worker_id=self.worker_id,
+                interval_seconds=self.heartbeat_interval_seconds,
+            ):
+                iter_start = time.monotonic()
 
-            # Execute
-            run = self.runner.run(task, failure_context=failure_context)
+                # Execute
+                run = self.runner.run(task, failure_context=failure_context)
 
-            if not run.success:
-                duration = time.monotonic() - iter_start
-                errors = {"agent": run.stderr or run.stdout}
+                if not run.success:
+                    duration = time.monotonic() - iter_start
+                    errors = {"agent": run.stderr or run.stdout}
 
-                if run.returncode == -1 and "not found" in run.stderr:
-                    result.stopped_reason = "agent_unavailable"
-                    self.queue.requeue(task.id, claim_token=claim_token)
-                    write_trace(
-                        task, success=False, duration_seconds=duration,
-                        stopped_reason="agent_unavailable",
-                        iteration=result.total_iterations,
-                        storage_dir=self.storage_dir,
-                    )
-                    break
-
-                failure_context = write_failure_report(
-                    task=task, validator_errors=errors,
-                    storage_dir=self.storage_dir,
-                )
-                result.failed_tasks.append(task.id)
-                self.queue.requeue(task.id, claim_token=claim_token)
-                write_progress(self.queue, self.storage_dir)
-                write_trace(
-                    task, success=False, duration_seconds=duration,
-                    validator_errors=errors,
-                    iteration=result.total_iterations,
-                    storage_dir=self.storage_dir,
-                )
-
-                # Track consecutive failures for escalation
-                consecutive_failures[task.id] = consecutive_failures.get(task.id, 0) + 1
-                last_errors[task.id] = errors
-                self._maybe_escalate(
-                    task, consecutive_failures, last_errors, result
-                )
-                continue
-
-            # Validate
-            errors = self._run_validators()
-            if errors:
-                duration = time.monotonic() - iter_start
-                failure_context = write_failure_report(
-                    task=task, validator_errors=errors,
-                    storage_dir=self.storage_dir,
-                )
-                result.failed_tasks.append(task.id)
-                self.queue.requeue(task.id, claim_token=claim_token)
-                write_progress(self.queue, self.storage_dir)
-                write_trace(
-                    task, success=False, duration_seconds=duration,
-                    validator_errors=errors,
-                    iteration=result.total_iterations,
-                    storage_dir=self.storage_dir,
-                )
-
-                consecutive_failures[task.id] = consecutive_failures.get(task.id, 0) + 1
-                last_errors[task.id] = errors
-                self._maybe_escalate(
-                    task, consecutive_failures, last_errors, result
-                )
-                continue
-
-            # Ralph cycle — quality gate (only when evaluator is set)
-            quality_score: float | None = None
-            quality_passed: bool | None = None
-            if self.quality_evaluator is not None:
-                retries = quality_retries.get(task.id, 0)
-                if retries < self.max_quality_retries:
-                    quality = self.quality_evaluator.evaluate(
-                        task=task,
-                        agent_output=run.stdout,
-                        workspace=self.workspace,
-                    )
-                    quality_score = quality.score
-                    quality_passed = quality.passed
-                    if not quality.passed:
-                        duration = time.monotonic() - iter_start
-                        quality_retries[task.id] = retries + 1
-                        failure_context = quality.context()
-                        result.failed_tasks.append(task.id)
+                    if run.returncode == -1 and "not found" in run.stderr:
+                        result.stopped_reason = "agent_unavailable"
+                        runtime_store.requeue_task(
+                            task.id,
+                            claim_token,
+                            worker_id=self.worker_id,
+                        )
                         self.queue.requeue(task.id, claim_token=claim_token)
-                        write_progress(self.queue, self.storage_dir)
                         write_trace(
                             task, success=False, duration_seconds=duration,
-                            quality_score=quality_score,
-                            quality_passed=False,
+                            stopped_reason="agent_unavailable",
                             iteration=result.total_iterations,
                             storage_dir=self.storage_dir,
                         )
-                        continue
+                        break
 
-            # Pass
-            duration = time.monotonic() - iter_start
-            failure_context = None
-            quality_retries.pop(task.id, None)
-            consecutive_failures.pop(task.id, None)
-            last_errors.pop(task.id, None)
-            self.queue.mark_done(task.id, claim_token=claim_token)
-            result.completed_tasks.append(task.id)
-            write_progress(self.queue, self.storage_dir)
-            write_trace(
-                task, success=True, duration_seconds=duration,
-                quality_score=quality_score,
-                quality_passed=quality_passed,
-                iteration=result.total_iterations,
-                storage_dir=self.storage_dir,
-            )
+                    failure_context = write_failure_report(
+                        task=task, validator_errors=errors,
+                        storage_dir=self.storage_dir,
+                    )
+                    result.failed_tasks.append(task.id)
+                    runtime_store.requeue_task(
+                        task.id,
+                        claim_token,
+                        worker_id=self.worker_id,
+                    )
+                    self.queue.requeue(task.id, claim_token=claim_token)
+                    write_progress(self.queue, self.storage_dir)
+                    write_trace(
+                        task, success=False, duration_seconds=duration,
+                        validator_errors=errors,
+                        iteration=result.total_iterations,
+                        storage_dir=self.storage_dir,
+                    )
 
-            if self.auto_commit:
-                self._git_commit(task)
+                    # Track consecutive failures for escalation
+                    consecutive_failures[task.id] = consecutive_failures.get(task.id, 0) + 1
+                    last_errors[task.id] = errors
+                    self._maybe_escalate(
+                        task, consecutive_failures, last_errors, result
+                    )
+                    continue
+
+                # Validate
+                errors = self._run_validators()
+                if errors:
+                    duration = time.monotonic() - iter_start
+                    failure_context = write_failure_report(
+                        task=task, validator_errors=errors,
+                        storage_dir=self.storage_dir,
+                    )
+                    result.failed_tasks.append(task.id)
+                    runtime_store.requeue_task(
+                        task.id,
+                        claim_token,
+                        worker_id=self.worker_id,
+                    )
+                    self.queue.requeue(task.id, claim_token=claim_token)
+                    write_progress(self.queue, self.storage_dir)
+                    write_trace(
+                        task, success=False, duration_seconds=duration,
+                        validator_errors=errors,
+                        iteration=result.total_iterations,
+                        storage_dir=self.storage_dir,
+                    )
+
+                    consecutive_failures[task.id] = consecutive_failures.get(task.id, 0) + 1
+                    last_errors[task.id] = errors
+                    self._maybe_escalate(
+                        task, consecutive_failures, last_errors, result
+                    )
+                    continue
+
+                # Ralph cycle — quality gate (only when evaluator is set)
+                quality_score: float | None = None
+                quality_passed: bool | None = None
+                if self.quality_evaluator is not None:
+                    retries = quality_retries.get(task.id, 0)
+                    if retries < self.max_quality_retries:
+                        quality = self.quality_evaluator.evaluate(
+                            task=task,
+                            agent_output=run.stdout,
+                            workspace=self.workspace,
+                        )
+                        quality_score = quality.score
+                        quality_passed = quality.passed
+                        if not quality.passed:
+                            duration = time.monotonic() - iter_start
+                            quality_retries[task.id] = retries + 1
+                            failure_context = quality.context()
+                            result.failed_tasks.append(task.id)
+                            runtime_store.requeue_task(
+                                task.id,
+                                claim_token,
+                                worker_id=self.worker_id,
+                            )
+                            self.queue.requeue(task.id, claim_token=claim_token)
+                            write_progress(self.queue, self.storage_dir)
+                            write_trace(
+                                task, success=False, duration_seconds=duration,
+                                quality_score=quality_score,
+                                quality_passed=False,
+                                iteration=result.total_iterations,
+                                storage_dir=self.storage_dir,
+                            )
+                            continue
+
+                # Pass
+                duration = time.monotonic() - iter_start
+                failure_context = None
+                quality_retries.pop(task.id, None)
+                consecutive_failures.pop(task.id, None)
+                last_errors.pop(task.id, None)
+                runtime_store.complete_task(
+                    task.id,
+                    claim_token,
+                    worker_id=self.worker_id,
+                )
+                self.queue.mark_done(task.id, claim_token=claim_token)
+                result.completed_tasks.append(task.id)
+                write_progress(self.queue, self.storage_dir)
+                write_trace(
+                    task, success=True, duration_seconds=duration,
+                    quality_score=quality_score,
+                    quality_passed=quality_passed,
+                    iteration=result.total_iterations,
+                    storage_dir=self.storage_dir,
+                )
+
+                if self.auto_commit:
+                    self._git_commit(task)
 
         if not result.stopped_reason:
             result.stopped_reason = "all_done"
+        if runtime_store is not None:
+            runtime_store.finish(result.stopped_reason)
 
         return result
 

@@ -52,9 +52,14 @@ class TaskQueue:
         self._require_claim(task_id, claim_token)
         self._update_status(task_id, "done", clear_claim=True)
 
-    def mark_in_progress(self, task_id: str, claimed_by: str = "jibuff-run") -> str:
-        token = f"{task_id}:{self._utc_timestamp()}"
-        now = self._utc_timestamp()
+    def mark_in_progress(
+        self,
+        task_id: str,
+        claimed_by: str = "jibuff-run",
+        claim_token: str | None = None,
+    ) -> str:
+        token = claim_token or f"{task_id}:{self.utc_timestamp()}"
+        now = self.utc_timestamp()
         self._update_status(
             task_id,
             "in_progress",
@@ -133,7 +138,7 @@ class TaskQueue:
                     continue
                 if task.claim_token != claim_token or task.status != "in_progress":
                     return False
-                task.heartbeat_at = self._utc_timestamp()
+                task.heartbeat_at = self.utc_timestamp()
                 self._flush_status_file()
                 return True
         return False
@@ -188,7 +193,7 @@ class TaskQueue:
                 return
 
     @staticmethod
-    def _utc_timestamp() -> str:
+    def utc_timestamp() -> str:
         return datetime.now(tz=UTC).isoformat()
 
     @staticmethod

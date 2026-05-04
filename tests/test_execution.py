@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestrator.agent_runner import AgentRunner
+from orchestrator.agent_runner import AgentRunner, resolve_agent_cmd
 from orchestrator.loop_controller import LoopController, ValidatorProtocol
 from orchestrator.task_queue import Task, TaskQueue
 from reporters.failure_report import write_failure_report
@@ -313,3 +313,51 @@ def test_loop_controller_stops_on_agent_unavailable(
     )
     result = ctrl.run()
     assert result.stopped_reason == "agent_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# resolve_agent_cmd — agent CLI selection
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_agent_cmd_uses_explicit_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JIBUFF_AGENT_CMD", "should-be-ignored")
+    assert resolve_agent_cmd(["my-agent", "--flag"]) == ["my-agent", "--flag"]
+
+
+def test_resolve_agent_cmd_uses_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JIBUFF_AGENT_CMD", "codex exec --some-flag")
+    assert resolve_agent_cmd() == ["codex", "exec", "--some-flag"]
+
+
+def test_resolve_agent_cmd_autodetect_prefers_claude(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("JIBUFF_AGENT_CMD", raising=False)
+    monkeypatch.setattr(
+        "orchestrator.agent_runner.shutil.which",
+        lambda name: f"/usr/local/bin/{name}",
+    )
+    cmd = resolve_agent_cmd()
+    assert cmd[0] == "claude"
+    assert "-p" in cmd
+
+
+def test_resolve_agent_cmd_autodetect_falls_back_to_codex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("JIBUFF_AGENT_CMD", raising=False)
+    monkeypatch.setattr(
+        "orchestrator.agent_runner.shutil.which",
+        lambda name: f"/usr/local/bin/{name}" if name == "codex" else None,
+    )
+    cmd = resolve_agent_cmd()
+    assert cmd[0] == "codex"
+    assert cmd[1] == "exec"
+
+
+def test_resolve_agent_cmd_raises_when_nothing_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("JIBUFF_AGENT_CMD", raising=False)
+    monkeypatch.setattr("orchestrator.agent_runner.shutil.which", lambda _: None)
+    with pytest.raises(RuntimeError, match="No agent CLI"):
+        resolve_agent_cmd()

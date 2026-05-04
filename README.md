@@ -68,7 +68,7 @@ pip install "jibuff[rtc]"         # + RTC validators (Playwright)
 pip install "jibuff[all]"         # everything
 ```
 
-Requires Python ≥ 3.12 and a working `claude` CLI (`npm install -g @anthropic-ai/claude-code`).
+Requires Python ≥ 3.12 and a coding-agent CLI on PATH — `claude` (`npm install -g @anthropic-ai/claude-code`) or `codex`. jibuff auto-detects in that order.
 
 Both `jibuff` and the short alias `jb` are available after installation.
 
@@ -86,7 +86,9 @@ jb interview "Add WebRTC screen sharing" --mode rtc   # RTC mode
 # Step 2: run the agent loop against spec/tasks.md
 jb run
 jb run --mode rtc
-jb run --no-commit          # skip auto git commit per task
+jb run --no-commit                       # skip auto git commit per task
+jb run --agent "codex exec"              # override agent CLI for this run
+JIBUFF_AGENT_CMD="codex exec" jb run     # or set globally via env var
 
 # Check current loop state
 jb status

@@ -97,6 +97,10 @@ def test_cleanup_workspace_removes_expired_interview_and_orphan_lock(tmp_path: P
 
 def test_install_skill_writes_skill_md(tmp_path: Path) -> None:
     skill_file = install_skill(tmp_path)
+    content = skill_file.read_text(encoding="utf-8")
 
     assert skill_file == tmp_path / "skills" / "jibuff" / "SKILL.md"
-    assert "jb interview" in skill_file.read_text(encoding="utf-8")
+    assert content.startswith("---\n")
+    assert "name: jibuff" in content
+    assert "description:" in content
+    assert "jb interview" in content

@@ -135,10 +135,12 @@ class TestTestValidator:
         assert "failed" in out
 
     def test_fails_on_coverage_below_threshold(self, tmp_path: Path) -> None:
-        cov_output = textwrap.dedent("""\
+        cov_output = textwrap.dedent(
+            """\
             FAIL Required test coverage of 80% not reached. Total coverage: 72%
             TOTAL    150     42    72%
-        """)
+        """
+        )
         with patch(
             "validators.tests.subprocess.run",
             return_value=_mock_run(1, stdout=cov_output),
@@ -167,17 +169,28 @@ class TestTestValidator:
 
 class TestSecurityValidator:
     def test_passes_when_clean(self, tmp_path: Path) -> None:
+        (tmp_path / "requirements.txt").write_text("pytest==8.3.5\n", encoding="utf-8")
         responses = [_mock_run(0, stdout="No issues identified."), _mock_run(0)]
         with patch("validators.security.subprocess.run", side_effect=responses):
             ok, out = SecurityValidator().run(tmp_path)
         assert ok is True
         assert out == ""
 
+    def test_skips_pip_audit_without_dependency_manifest(self, tmp_path: Path) -> None:
+        with patch("validators.security.subprocess.run", return_value=_mock_run(0)) as mock:
+            ok, out = SecurityValidator().run(tmp_path)
+        assert ok is True
+        assert out == ""
+        assert mock.call_count == 1
+        assert mock.call_args.args[0][0] == "bandit"
+
     def test_fails_on_bandit_high_severity(self, tmp_path: Path) -> None:
-        bandit_output = textwrap.dedent("""\
+        bandit_output = textwrap.dedent(
+            """\
             >> Issue: [B608:hardcoded_sql_expressions]
                Severity: HIGH   Confidence: MEDIUM
-        """)
+        """
+        )
         responses = [_mock_run(0, stdout=bandit_output), _mock_run(0)]
         with patch("validators.security.subprocess.run", side_effect=responses):
             ok, out = SecurityValidator().run(tmp_path)
@@ -194,18 +207,21 @@ class TestSecurityValidator:
         assert ok is True
 
     def test_fails_on_pip_audit_vulnerability(self, tmp_path: Path) -> None:
+        (tmp_path / "requirements.txt").write_text("requests==2.27.0\n", encoding="utf-8")
         audit_output = "requests 2.27.0 GHSA-j8r2-6x86-q33q"
         responses = [
             _mock_run(0, stdout="No issues identified."),
             _mock_run(1, stdout=audit_output),
         ]
-        with patch("validators.security.subprocess.run", side_effect=responses):
+        with patch("validators.security.subprocess.run", side_effect=responses) as mock:
             ok, out = SecurityValidator().run(tmp_path)
         assert ok is False
         assert "pip-audit" in out
         assert "requests" in out
+        assert "-r" in mock.call_args_list[1].args[0]
 
     def test_combines_both_failures(self, tmp_path: Path) -> None:
+        (tmp_path / "requirements.txt").write_text("requests==2.27.0\n", encoding="utf-8")
         bandit_output = "Severity: HIGH   Confidence: HIGH"
         audit_output = "requests 2.27.0 CVE-2023-xxxx"
         responses = [

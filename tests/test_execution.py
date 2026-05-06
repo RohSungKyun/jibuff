@@ -19,7 +19,8 @@ from reporters.progress import write_progress
 # Fixtures
 # ---------------------------------------------------------------------------
 
-SAMPLE_TASKS_MD = textwrap.dedent("""\
+SAMPLE_TASKS_MD = textwrap.dedent(
+    """\
     # Tasks
 
     ## Phase 0
@@ -29,7 +30,8 @@ SAMPLE_TASKS_MD = textwrap.dedent("""\
     - [x] P0-03: Write smoke test
     - [~] P0-04: Set up CI
     - [!] P0-05: Configure secrets
-""")
+"""
+)
 
 
 @pytest.fixture
@@ -152,10 +154,15 @@ def test_task_queue_summary(tmp_tasks: tuple[Path, Path]) -> None:
 
 def test_task_queue_status_json_overrides_marker(tmp_tasks: tuple[Path, Path]) -> None:
     tasks_file, status_file = tmp_tasks
-    status_file.write_text(json.dumps({
-        "version": "0.1.0",
-        "tasks": [{"id": "P0-01", "status": "done", "description": "..."}],
-    }), encoding="utf-8")
+    status_file.write_text(
+        json.dumps(
+            {
+                "version": "0.1.0",
+                "tasks": [{"id": "P0-01", "status": "done", "description": "..."}],
+            }
+        ),
+        encoding="utf-8",
+    )
     q = TaskQueue(tasks_file=tasks_file, status_file=status_file)
     statuses = {t.id: t.status for t in q._tasks}
     assert statuses["P0-01"] == "done"
@@ -259,9 +266,7 @@ def _make_failing_validator(name: str, error: str) -> ValidatorProtocol:
     return v
 
 
-def test_loop_controller_all_done_on_success(
-    tmp_path: Path, tmp_tasks: tuple[Path, Path]
-) -> None:
+def test_loop_controller_all_done_on_success(tmp_path: Path, tmp_tasks: tuple[Path, Path]) -> None:
     tasks_file, status_file = tmp_tasks
     q = TaskQueue(tasks_file=tasks_file, status_file=status_file)
     runner = AgentRunner(workspace=tmp_path, agent_cmd=["echo"])
@@ -281,9 +286,7 @@ def test_loop_controller_all_done_on_success(
     assert q.next() is None  # no more todo tasks
 
 
-def test_loop_controller_fails_and_requeues(
-    tmp_path: Path, tmp_tasks: tuple[Path, Path]
-) -> None:
+def test_loop_controller_fails_and_requeues(tmp_path: Path, tmp_tasks: tuple[Path, Path]) -> None:
     tasks_file, status_file = tmp_tasks
     q = TaskQueue(tasks_file=tasks_file, status_file=status_file)
     runner = AgentRunner(workspace=tmp_path, agent_cmd=["echo"])
@@ -362,9 +365,34 @@ def test_resolve_agent_cmd_uses_explicit_override(monkeypatch: pytest.MonkeyPatc
     assert resolve_agent_cmd(["my-agent", "--flag"]) == ["my-agent", "--flag"]
 
 
+def test_resolve_agent_cmd_adds_codex_non_interactive_flag_to_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JIBUFF_AGENT_CMD", "should-be-ignored")
+    assert resolve_agent_cmd(["codex", "exec"]) == [
+        "codex",
+        "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+    ]
+
+
+def test_resolve_agent_cmd_keeps_existing_codex_approval_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("JIBUFF_AGENT_CMD", raising=False)
+    assert resolve_agent_cmd(
+        ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--json"]
+    ) == ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--json"]
+
+
 def test_resolve_agent_cmd_uses_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JIBUFF_AGENT_CMD", "codex exec --some-flag")
-    assert resolve_agent_cmd() == ["codex", "exec", "--some-flag"]
+    assert resolve_agent_cmd() == [
+        "codex",
+        "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--some-flag",
+    ]
 
 
 def test_resolve_agent_cmd_autodetect_prefers_claude(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -389,6 +417,7 @@ def test_resolve_agent_cmd_autodetect_falls_back_to_codex(
     cmd = resolve_agent_cmd()
     assert cmd[0] == "codex"
     assert cmd[1] == "exec"
+    assert "--dangerously-bypass-approvals-and-sandbox" in cmd
 
 
 def test_resolve_agent_cmd_raises_when_nothing_available(

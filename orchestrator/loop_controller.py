@@ -12,14 +12,13 @@ from reporters.failure_report import write_failure_report
 from reporters.progress import write_progress
 from reporters.tracer import write_trace
 
-from .agent_runner import AgentRunner
+from .agent_runner import AgentRunner, RunResult
 from .runtime_store import DEFAULT_WORKER_ID, Heartbeat, RuntimeStore
 from .task_queue import Task, TaskQueue
 
 
 class QualityEvaluatorProtocol(Protocol):
-    def evaluate(self, task: Task, agent_output: str, workspace: Path) -> Any:
-        ...
+    def evaluate(self, task: Task, agent_output: str, workspace: Path) -> Any: ...
 
 
 class EscalationHandler(Protocol):
@@ -29,8 +28,7 @@ class EscalationHandler(Protocol):
         failure_count: int,
         last_errors: dict[str, str],
         workspace: Path,
-    ) -> str | None:
-        ...
+    ) -> str | None: ...
 
 
 @dataclass
@@ -56,6 +54,7 @@ class LoopController:
     escalation_handler: EscalationHandler | None = None
     escalation_threshold: int = 3  # consecutive failures before escalation
     mode: str = "quick"
+    fallback_agent_cmd: list[str] | None = None
     runtime_store: RuntimeStore | None = None
     worker_id: str = DEFAULT_WORKER_ID
     heartbeat_interval_seconds: float = 30.0
@@ -146,6 +145,17 @@ class LoopController:
                         duration = time.monotonic() - iter_start
                         errors = {"agent": run.stderr or run.stdout}
 
+                        if run.rate_limited and self.fallback_agent_cmd:
+                            self._switch_to_fallback(run)
+                            runtime_store.requeue_task(
+                                task.id,
+                                claim_token,
+                                worker_id=self.worker_id,
+                            )
+                            self.queue.requeue(task.id, claim_token=claim_token)
+                            write_progress(self.queue, self.storage_dir)
+                            continue
+
                         if run.returncode == -1 and "not found" in run.stderr:
                             result.stopped_reason = "agent_unavailable"
                             runtime_store.requeue_task(
@@ -155,7 +165,9 @@ class LoopController:
                             )
                             self.queue.requeue(task.id, claim_token=claim_token)
                             write_trace(
-                                task, success=False, duration_seconds=duration,
+                                task,
+                                success=False,
+                                duration_seconds=duration,
                                 stopped_reason="agent_unavailable",
                                 iteration=result.total_iterations,
                                 storage_dir=self.storage_dir,
@@ -163,7 +175,8 @@ class LoopController:
                             break
 
                         failure_context = write_failure_report(
-                            task=task, validator_errors=errors,
+                            task=task,
+                            validator_errors=errors,
                             storage_dir=self.storage_dir,
                         )
                         result.failed_tasks.append(task.id)
@@ -175,7 +188,9 @@ class LoopController:
                         self.queue.requeue(task.id, claim_token=claim_token)
                         write_progress(self.queue, self.storage_dir)
                         write_trace(
-                            task, success=False, duration_seconds=duration,
+                            task,
+                            success=False,
+                            duration_seconds=duration,
                             validator_errors=errors,
                             iteration=result.total_iterations,
                             storage_dir=self.storage_dir,
@@ -188,9 +203,7 @@ class LoopController:
                             f"│  └─ ↻ retry {consecutive_failures[task.id]}/"
                             f"{self.escalation_threshold} (agent failure)"
                         )
-                        self._maybe_escalate(
-                            task, consecutive_failures, last_errors, result
-                        )
+                        self._maybe_escalate(task, consecutive_failures, last_errors, result)
                         continue
 
                     # Validate
@@ -198,7 +211,8 @@ class LoopController:
                     if errors:
                         duration = time.monotonic() - iter_start
                         failure_context = write_failure_report(
-                            task=task, validator_errors=errors,
+                            task=task,
+                            validator_errors=errors,
                             storage_dir=self.storage_dir,
                         )
                         result.failed_tasks.append(task.id)
@@ -210,7 +224,9 @@ class LoopController:
                         self.queue.requeue(task.id, claim_token=claim_token)
                         write_progress(self.queue, self.storage_dir)
                         write_trace(
-                            task, success=False, duration_seconds=duration,
+                            task,
+                            success=False,
+                            duration_seconds=duration,
                             validator_errors=errors,
                             iteration=result.total_iterations,
                             storage_dir=self.storage_dir,
@@ -222,9 +238,7 @@ class LoopController:
                             f"│  └─ ↻ retry {consecutive_failures[task.id]}/"
                             f"{self.escalation_threshold} ({len(errors)} validator failure(s))"
                         )
-                        self._maybe_escalate(
-                            task, consecutive_failures, last_errors, result
-                        )
+                        self._maybe_escalate(task, consecutive_failures, last_errors, result)
                         continue
 
                     # Ralph cycle — quality gate (only when evaluator is set)
@@ -253,7 +267,9 @@ class LoopController:
                                 self.queue.requeue(task.id, claim_token=claim_token)
                                 write_progress(self.queue, self.storage_dir)
                                 write_trace(
-                                    task, success=False, duration_seconds=duration,
+                                    task,
+                                    success=False,
+                                    duration_seconds=duration,
                                     quality_score=quality_score,
                                     quality_passed=False,
                                     iteration=result.total_iterations,
@@ -281,7 +297,9 @@ class LoopController:
                     result.completed_tasks.append(task.id)
                     write_progress(self.queue, self.storage_dir)
                     write_trace(
-                        task, success=True, duration_seconds=duration,
+                        task,
+                        success=True,
+                        duration_seconds=duration,
                         quality_score=quality_score,
                         quality_passed=quality_passed,
                         iteration=result.total_iterations,
@@ -331,6 +349,13 @@ class LoopController:
                 errors[validator.name] = output
         return errors
 
+    def _switch_to_fallback(self, run: RunResult) -> None:
+        """Switch runner to fallback agent after a rate-limit hit."""
+        prev = self.runner.agent_cmd[0]
+        self.runner.agent_cmd = self.fallback_agent_cmd  # type: ignore[assignment]
+        self.fallback_agent_cmd = None
+        self._log(f"│  └─ ⇄ rate limit on '{prev}' — switching to '{self.runner.agent_cmd[0]}'")
+
     def _maybe_escalate(
         self,
         task: Task,
@@ -344,9 +369,7 @@ class LoopController:
             return
         errors = last_errors.get(task.id, {})
         self._log(f"│  └─ ⚠ escalating after {count} consecutive failures")
-        url = self.escalation_handler(
-            task, count, errors, self.workspace
-        )
+        url = self.escalation_handler(task, count, errors, self.workspace)
         if url:
             result.escalated_issues.append(url)
         # Reset counter so we don't re-escalate every iteration

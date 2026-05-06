@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestrator.agent_runner import AgentRunner, resolve_agent_cmd
+from orchestrator.agent_runner import AgentRunner, is_rate_limited, resolve_agent_cmd
 from orchestrator.loop_controller import LoopController, ValidatorProtocol
 from orchestrator.task_queue import Task, TaskClaimError, TaskQueue
 from reporters.failure_report import write_failure_report
@@ -19,7 +19,8 @@ from reporters.progress import write_progress
 # Fixtures
 # ---------------------------------------------------------------------------
 
-SAMPLE_TASKS_MD = textwrap.dedent("""\
+SAMPLE_TASKS_MD = textwrap.dedent(
+    """\
     # Tasks
 
     ## Phase 0
@@ -29,7 +30,8 @@ SAMPLE_TASKS_MD = textwrap.dedent("""\
     - [x] P0-03: Write smoke test
     - [~] P0-04: Set up CI
     - [!] P0-05: Configure secrets
-""")
+"""
+)
 
 
 @pytest.fixture
@@ -152,10 +154,15 @@ def test_task_queue_summary(tmp_tasks: tuple[Path, Path]) -> None:
 
 def test_task_queue_status_json_overrides_marker(tmp_tasks: tuple[Path, Path]) -> None:
     tasks_file, status_file = tmp_tasks
-    status_file.write_text(json.dumps({
-        "version": "0.1.0",
-        "tasks": [{"id": "P0-01", "status": "done", "description": "..."}],
-    }), encoding="utf-8")
+    status_file.write_text(
+        json.dumps(
+            {
+                "version": "0.1.0",
+                "tasks": [{"id": "P0-01", "status": "done", "description": "..."}],
+            }
+        ),
+        encoding="utf-8",
+    )
     q = TaskQueue(tasks_file=tasks_file, status_file=status_file)
     statuses = {t.id: t.status for t in q._tasks}
     assert statuses["P0-01"] == "done"
@@ -259,9 +266,7 @@ def _make_failing_validator(name: str, error: str) -> ValidatorProtocol:
     return v
 
 
-def test_loop_controller_all_done_on_success(
-    tmp_path: Path, tmp_tasks: tuple[Path, Path]
-) -> None:
+def test_loop_controller_all_done_on_success(tmp_path: Path, tmp_tasks: tuple[Path, Path]) -> None:
     tasks_file, status_file = tmp_tasks
     q = TaskQueue(tasks_file=tasks_file, status_file=status_file)
     runner = AgentRunner(workspace=tmp_path, agent_cmd=["echo"])
@@ -281,9 +286,7 @@ def test_loop_controller_all_done_on_success(
     assert q.next() is None  # no more todo tasks
 
 
-def test_loop_controller_fails_and_requeues(
-    tmp_path: Path, tmp_tasks: tuple[Path, Path]
-) -> None:
+def test_loop_controller_fails_and_requeues(tmp_path: Path, tmp_tasks: tuple[Path, Path]) -> None:
     tasks_file, status_file = tmp_tasks
     q = TaskQueue(tasks_file=tasks_file, status_file=status_file)
     runner = AgentRunner(workspace=tmp_path, agent_cmd=["echo"])
@@ -451,3 +454,126 @@ def test_loop_controller_quiet_by_default(
     out = capsys.readouterr().out
     assert "[task" not in out
     assert "iteration" not in out
+
+
+# ---------------------------------------------------------------------------
+# Rate limit detection + fallback agent slot
+# ---------------------------------------------------------------------------
+
+
+def test_is_rate_limited_detects_signals() -> None:
+    assert is_rate_limited("", "Error: rate limit exceeded") is True
+    assert is_rate_limited("", "429 Too Many Requests") is True
+    assert is_rate_limited("Claude is overloaded", "") is True
+    assert is_rate_limited("", "quota exceeded") is True
+    assert is_rate_limited("", "some other error") is False
+    assert is_rate_limited("", "") is False
+
+
+def test_agent_runner_sets_rate_limited_flag(tmp_path: Path) -> None:
+    from unittest.mock import patch
+
+    task = Task(id="P0-01", description="test", status="todo")
+    runner = AgentRunner(workspace=tmp_path, agent_cmd=["false"])
+
+    mock_result = MagicMock()
+    mock_result.returncode = 1
+    mock_result.stdout = ""
+    mock_result.stderr = "Error: rate limit exceeded, please retry"
+
+    with patch("orchestrator.agent_runner.subprocess.run", return_value=mock_result):
+        result = runner.run(task)
+
+    assert result.success is False
+    assert result.rate_limited is True
+
+
+def test_agent_runner_no_rate_limited_on_success(tmp_path: Path) -> None:
+    runner = AgentRunner(workspace=tmp_path, agent_cmd=["echo"])
+    task = Task(id="P0-01", description="test", status="todo")
+    result = runner.run(task)
+    assert result.success is True
+    assert result.rate_limited is False
+
+
+def test_loop_controller_switches_to_fallback_on_rate_limit(
+    tmp_path: Path, tmp_tasks: tuple[Path, Path]
+) -> None:
+    from unittest.mock import patch
+
+    tasks_file, status_file = tmp_tasks
+    q = TaskQueue(tasks_file=tasks_file, status_file=status_file)
+    runner = AgentRunner(
+        workspace=tmp_path, agent_cmd=["claude", "--dangerously-skip-permissions", "-p"]
+    )
+
+    call_count = 0
+
+    def fake_subprocess_run(cmd: list[str], **kwargs: object) -> MagicMock:
+        nonlocal call_count
+        call_count += 1
+        m = MagicMock()
+        if cmd[0] == "claude":
+            # Claude hits rate limit
+            m.returncode = 1
+            m.stdout = ""
+            m.stderr = "rate limit exceeded"
+        else:
+            # Fallback (codex or echo) succeeds
+            m.returncode = 0
+            m.stdout = "done"
+            m.stderr = ""
+        return m
+
+    ctrl = LoopController(
+        queue=q,
+        runner=runner,
+        validators=[_make_passing_validator()],
+        storage_dir=tmp_path / "storage",
+        workspace=tmp_path,
+        max_iterations=10,
+        auto_commit=False,
+        fallback_agent_cmd=["echo"],
+    )
+
+    with patch("orchestrator.agent_runner.subprocess.run", side_effect=fake_subprocess_run):
+        result = ctrl.run()
+
+    # After switching to fallback, tasks should complete
+    assert ctrl.runner.agent_cmd[0] == "echo"
+    assert ctrl.fallback_agent_cmd is None  # consumed after switch
+    assert len(result.completed_tasks) > 0
+
+
+def test_loop_controller_no_fallback_treats_rate_limit_as_normal_failure(
+    tmp_path: Path, tmp_tasks: tuple[Path, Path]
+) -> None:
+    from unittest.mock import patch
+
+    tasks_file, status_file = tmp_tasks
+    q = TaskQueue(tasks_file=tasks_file, status_file=status_file)
+    runner = AgentRunner(
+        workspace=tmp_path, agent_cmd=["claude", "--dangerously-skip-permissions", "-p"]
+    )
+
+    mock_result = MagicMock()
+    mock_result.returncode = 1
+    mock_result.stdout = ""
+    mock_result.stderr = "rate limit exceeded"
+
+    ctrl = LoopController(
+        queue=q,
+        runner=runner,
+        validators=[_make_passing_validator()],
+        storage_dir=tmp_path / "storage",
+        workspace=tmp_path,
+        max_iterations=2,
+        auto_commit=False,
+        fallback_agent_cmd=None,
+    )
+
+    with patch("orchestrator.agent_runner.subprocess.run", return_value=mock_result):
+        result = ctrl.run()
+
+    assert result.stopped_reason == "max_iterations"
+    assert len(result.completed_tasks) == 0

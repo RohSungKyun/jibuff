@@ -21,6 +21,25 @@ _AGENT_DEFAULTS: dict[str, list[str]] = {
     "codex": ["exec"],
 }
 
+# Substrings that indicate the agent hit a provider-side rate/capacity limit.
+_RATE_LIMIT_SIGNALS: frozenset[str] = frozenset(
+    {
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "overloaded",
+        "capacity",
+        "quota exceeded",
+        "429",
+    }
+)
+
+
+def is_rate_limited(stdout: str, stderr: str) -> bool:
+    """Return True when the agent output signals a provider-side rate limit."""
+    combined = (stdout + stderr).lower()
+    return any(signal in combined for signal in _RATE_LIMIT_SIGNALS)
+
 
 def resolve_agent_cmd(override: list[str] | None = None) -> list[str]:
     """Resolve which agent CLI invocation to use for task execution.
@@ -58,6 +77,7 @@ class RunResult:
     stderr: str
     returncode: int
     duration_seconds: float
+    rate_limited: bool = False
 
 
 @dataclass
@@ -107,6 +127,7 @@ class AgentRunner:
             stderr=result.stderr,
             returncode=result.returncode,
             duration_seconds=elapsed,
+            rate_limited=result.returncode != 0 and is_rate_limited(result.stdout, result.stderr),
         )
 
     # ------------------------------------------------------------------

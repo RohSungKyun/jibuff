@@ -165,6 +165,21 @@ Task status entries also carry `revision`, `claimed_by`, `claimed_at`, and
 under `.jibuff/runs/<run_id>/`, with task and worker state split into separate
 JSON files so future parallel workers do not contend on a single status file.
 
+These files are runtime artifacts. They are useful while a local run is active,
+but they usually should not be committed to your application repository:
+
+```gitignore
+.jibuff/
+storage/state.json
+storage/task_status.json
+storage/last_failure.md
+storage/progress.md
+storage/open_issues.json
+storage/decision_log.md
+storage/traces/
+storage/issues/
+```
+
 ```
 your-project/
 └── .jibuff/

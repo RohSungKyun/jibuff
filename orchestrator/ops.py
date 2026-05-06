@@ -14,7 +14,14 @@ from orchestrator.task_queue import TaskQueue
 MCP_INTERVIEW_TTL_HOURS = 24
 
 
-JIBUFF_SKILL_MD = """# jibuff
+JIBUFF_SKILL_MD = """---
+name: jibuff
+description: >
+  Use this skill when a coding task needs requirement clarification, spec locking,
+  or validation-driven execution before handing work to an agent.
+---
+
+# jibuff
 
 Use this skill when a coding task needs requirement clarification, spec locking, or
 validation-driven execution before handing work to an agent.

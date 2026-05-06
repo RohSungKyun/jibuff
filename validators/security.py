@@ -71,9 +71,9 @@ class SecurityValidator:
 
     def _pip_audit_commands(self, workspace: Path) -> list[list[str]]:
         base = ["pip-audit", "--progress-spinner=off"]
-        requirement_files = sorted(workspace.glob("requirements*.txt"))
+        requirement_files = [p for p in sorted(workspace.glob("requirements*.txt")) if p.is_file()]
         if requirement_files:
-            return [base + ["-r", str(path)] for path in requirement_files if path.is_file()]
+            return [base + ["-r", str(path)] for path in requirement_files]
 
         pyproject = workspace / "pyproject.toml"
         if self._pyproject_has_dependencies(pyproject):

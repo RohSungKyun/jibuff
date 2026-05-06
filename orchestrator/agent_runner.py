@@ -18,7 +18,12 @@ from .task_queue import Task
 # to override the entire invocation.
 _AGENT_DEFAULTS: dict[str, list[str]] = {
     "claude": ["--dangerously-skip-permissions", "-p"],
-    "codex": ["exec"],
+    "codex": ["exec", "--dangerously-bypass-approvals-and-sandbox"],
+}
+
+_CODEX_NON_INTERACTIVE_FLAGS = {
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--ask-for-approval",
 }
 
 
@@ -33,11 +38,11 @@ def resolve_agent_cmd(override: list[str] | None = None) -> list[str]:
     Raises ``RuntimeError`` if nothing is set and no known CLI is on PATH.
     """
     if override is not None:
-        return list(override)
+        return _normalize_agent_cmd(list(override))
 
     env_cmd = os.environ.get("JIBUFF_AGENT_CMD")
     if env_cmd:
-        return shlex.split(env_cmd)
+        return _normalize_agent_cmd(shlex.split(env_cmd))
 
     for name in _AGENT_DEFAULTS:
         if shutil.which(name):
@@ -48,6 +53,17 @@ def resolve_agent_cmd(override: list[str] | None = None) -> list[str]:
         "or set JIBUFF_AGENT_CMD to your full agent invocation "
         "(e.g. JIBUFF_AGENT_CMD='codex exec --some-flag')."
     )
+
+
+def _normalize_agent_cmd(cmd: list[str]) -> list[str]:
+    """Add required non-interactive flags for known agent invocations."""
+    if len(cmd) < 2 or Path(cmd[0]).name != "codex" or cmd[1] != "exec":
+        return cmd
+
+    if any(flag in cmd for flag in _CODEX_NON_INTERACTIVE_FLAGS):
+        return cmd
+
+    return [cmd[0], cmd[1], "--dangerously-bypass-approvals-and-sandbox", *cmd[2:]]
 
 
 @dataclass
@@ -67,7 +83,7 @@ class AgentRunner:
     timeout_seconds: int = 300
 
     def run(self, task: Task, failure_context: str | None = None) -> RunResult:
-        """Invoke Claude Code for a single task with isolated context."""
+        """Invoke a coding agent for a single task with isolated context."""
         prompt = self._build_prompt(task, failure_context)
         start = time.monotonic()
 

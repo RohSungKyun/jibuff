@@ -121,14 +121,6 @@ def run(
             "Overrides JIBUFF_AGENT_CMD and autodetect.",
         ),
     ] = "",
-    verbose: Annotated[
-        bool,
-        typer.Option(
-            "--verbose",
-            "-v",
-            help="Print per-step narration: task, iteration, agent call, validators.",
-        ),
-    ] = False,
 ) -> None:
     """Run the agent loop against spec/tasks.md until all tasks are done."""
     try:
@@ -183,6 +175,7 @@ def run(
     cfg = get_mode(mode)
     if cfg.quality_threshold is not None:
         from evaluators.quality import QualityEvaluator
+
         quality_evaluator = QualityEvaluator(threshold=cfg.quality_threshold)
 
     from reporters.escalation import prompt_escalation
@@ -200,7 +193,6 @@ def run(
         escalation_handler=prompt_escalation,
         escalation_threshold=3,
         mode=mode,
-        verbose=verbose,
     )
 
     result = controller.run()
@@ -397,9 +389,7 @@ def recover(
 def setup_skill(
     destination: Annotated[
         str,
-        typer.Option(
-            help="Codex home directory to install into (default: CODEX_HOME or ~/.codex)"
-        ),
+        typer.Option(help="Codex home directory to install into (default: CODEX_HOME or ~/.codex)"),
     ] = "",
 ) -> None:
     """Install a thin jibuff SKILL.md wrapper for Codex skill discovery."""
@@ -415,8 +405,7 @@ def _detect_jb_command() -> str:
     path = shutil.which("jb") or shutil.which("jibuff")
     if not path:
         typer.echo(
-            "Error: jb/jibuff not found on PATH.\n"
-            "Install with: pip install jibuff",
+            "Error: jb/jibuff not found on PATH.\n" "Install with: pip install jibuff",
             err=True,
         )
         raise typer.Exit(1)
@@ -553,4 +542,5 @@ app.add_typer(mcp_app, name="mcp")
 def mcp_serve() -> None:
     """Start the jibuff MCP stdio server."""
     from jibuff_mcp.server import serve as jibuff_serve  # type: ignore[import]
+
     asyncio.run(jibuff_serve())

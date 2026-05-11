@@ -62,6 +62,9 @@ jibuff run --mode quick "add CSV export to the report module"
 ```
 
 Gates run in order. Any gate failure halts the stack and produces a structured failure report.
+Automated QA gates only cover machine-checkable behavior. Requirements that can only be proven
+by real users, live participants, production traffic, or manual actual-operation testing are kept
+out of executable validation tasks so the agent loop does not block on human confirmation.
 
 **Invocation:**
 ```bash

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,8 +19,7 @@ from .task_queue import Task, TaskQueue
 
 
 class QualityEvaluatorProtocol(Protocol):
-    def evaluate(self, task: Task, agent_output: str, workspace: Path) -> Any:
-        ...
+    def evaluate(self, task: Task, agent_output: str, workspace: Path) -> Any: ...
 
 
 class EscalationHandler(Protocol):
@@ -29,8 +29,7 @@ class EscalationHandler(Protocol):
         failure_count: int,
         last_errors: dict[str, str],
         workspace: Path,
-    ) -> str | None:
-        ...
+    ) -> str | None: ...
 
 
 @dataclass
@@ -59,11 +58,9 @@ class LoopController:
     runtime_store: RuntimeStore | None = None
     worker_id: str = DEFAULT_WORKER_ID
     heartbeat_interval_seconds: float = 30.0
-    verbose: bool = False  # emit per-step narration to stderr
 
     def _log(self, msg: str) -> None:
-        if self.verbose:
-            print(msg, flush=True)
+        print(msg, file=sys.stderr, flush=True)
 
     def run(self) -> LoopResult:
         result = LoopResult()
@@ -111,18 +108,14 @@ class LoopController:
                 )
                 write_progress(self.queue, self.storage_dir)
 
-                if self.verbose:
-                    desc = (
-                        task.description
-                        if len(task.description) <= 80
-                        else task.description[:77] + "..."
-                    )
-                    self._log(f"\n├─ [task {task.id}] {desc}")
-                    self._log(f"│  ├─ iteration {result.total_iterations}/{self.max_iterations}")
-                    self._log(
-                        f"│  ├─ agent: {self.runner.agent_cmd[0]} "
-                        f"(timeout {self.runner.timeout_seconds}s)"
-                    )
+                desc = (
+                    task.description
+                    if len(task.description) <= 80
+                    else task.description[:77] + "..."
+                )
+                self._log(f"\n├─ [task {task.id}] {desc}")
+                self._log(f"│  ├─ iteration {result.total_iterations}/{self.max_iterations}")
+                self._log(f"│  ├─ agent: {self._runner_name()} ({self._runner_timeout_label()})")
 
                 with Heartbeat(
                     runtime_store,
@@ -135,12 +128,11 @@ class LoopController:
 
                     # Execute
                     run = self.runner.run(task, failure_context=failure_context)
-                    if self.verbose:
-                        mark = "✓" if run.success else "✗"
-                        self._log(
-                            f"│  │  └─ {mark} done in {run.duration_seconds:.1f}s "
-                            f"(exit {run.returncode})"
-                        )
+                    mark = "✓" if run.success else "✗"
+                    self._log(
+                        f"│  │  └─ {mark} done in {run.duration_seconds:.1f}s "
+                        f"(exit {run.returncode})"
+                    )
 
                     if not run.success:
                         duration = time.monotonic() - iter_start
@@ -155,7 +147,9 @@ class LoopController:
                             )
                             self.queue.requeue(task.id, claim_token=claim_token)
                             write_trace(
-                                task, success=False, duration_seconds=duration,
+                                task,
+                                success=False,
+                                duration_seconds=duration,
                                 stopped_reason="agent_unavailable",
                                 iteration=result.total_iterations,
                                 storage_dir=self.storage_dir,
@@ -163,7 +157,8 @@ class LoopController:
                             break
 
                         failure_context = write_failure_report(
-                            task=task, validator_errors=errors,
+                            task=task,
+                            validator_errors=errors,
                             storage_dir=self.storage_dir,
                         )
                         result.failed_tasks.append(task.id)
@@ -175,7 +170,9 @@ class LoopController:
                         self.queue.requeue(task.id, claim_token=claim_token)
                         write_progress(self.queue, self.storage_dir)
                         write_trace(
-                            task, success=False, duration_seconds=duration,
+                            task,
+                            success=False,
+                            duration_seconds=duration,
                             validator_errors=errors,
                             iteration=result.total_iterations,
                             storage_dir=self.storage_dir,
@@ -188,9 +185,7 @@ class LoopController:
                             f"│  └─ ↻ retry {consecutive_failures[task.id]}/"
                             f"{self.escalation_threshold} (agent failure)"
                         )
-                        self._maybe_escalate(
-                            task, consecutive_failures, last_errors, result
-                        )
+                        self._maybe_escalate(task, consecutive_failures, last_errors, result)
                         continue
 
                     # Validate
@@ -198,7 +193,8 @@ class LoopController:
                     if errors:
                         duration = time.monotonic() - iter_start
                         failure_context = write_failure_report(
-                            task=task, validator_errors=errors,
+                            task=task,
+                            validator_errors=errors,
                             storage_dir=self.storage_dir,
                         )
                         result.failed_tasks.append(task.id)
@@ -210,7 +206,9 @@ class LoopController:
                         self.queue.requeue(task.id, claim_token=claim_token)
                         write_progress(self.queue, self.storage_dir)
                         write_trace(
-                            task, success=False, duration_seconds=duration,
+                            task,
+                            success=False,
+                            duration_seconds=duration,
                             validator_errors=errors,
                             iteration=result.total_iterations,
                             storage_dir=self.storage_dir,
@@ -222,9 +220,7 @@ class LoopController:
                             f"│  └─ ↻ retry {consecutive_failures[task.id]}/"
                             f"{self.escalation_threshold} ({len(errors)} validator failure(s))"
                         )
-                        self._maybe_escalate(
-                            task, consecutive_failures, last_errors, result
-                        )
+                        self._maybe_escalate(task, consecutive_failures, last_errors, result)
                         continue
 
                     # Ralph cycle — quality gate (only when evaluator is set)
@@ -253,7 +249,9 @@ class LoopController:
                                 self.queue.requeue(task.id, claim_token=claim_token)
                                 write_progress(self.queue, self.storage_dir)
                                 write_trace(
-                                    task, success=False, duration_seconds=duration,
+                                    task,
+                                    success=False,
+                                    duration_seconds=duration,
                                     quality_score=quality_score,
                                     quality_passed=False,
                                     iteration=result.total_iterations,
@@ -281,7 +279,9 @@ class LoopController:
                     result.completed_tasks.append(task.id)
                     write_progress(self.queue, self.storage_dir)
                     write_trace(
-                        task, success=True, duration_seconds=duration,
+                        task,
+                        success=True,
+                        duration_seconds=duration,
                         quality_score=quality_score,
                         quality_passed=quality_passed,
                         iteration=result.total_iterations,
@@ -307,6 +307,17 @@ class LoopController:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _runner_name(self) -> str:
+        """Return a printable runner command without assuming a concrete runner."""
+        agent_cmd = getattr(self.runner, "agent_cmd", None)
+        if isinstance(agent_cmd, list) and agent_cmd:
+            return str(agent_cmd[0])
+        return type(self.runner).__name__
+
+    def _runner_timeout_label(self) -> str:
+        timeout = getattr(self.runner, "timeout_seconds", None)
+        return f"timeout {timeout}s" if isinstance(timeout, int) else "timeout unknown"
 
     def _run_validators(self) -> dict[str, str]:
         """Run all validators; collect errors from failing ones."""
@@ -344,9 +355,7 @@ class LoopController:
             return
         errors = last_errors.get(task.id, {})
         self._log(f"│  └─ ⚠ escalating after {count} consecutive failures")
-        url = self.escalation_handler(
-            task, count, errors, self.workspace
-        )
+        url = self.escalation_handler(task, count, errors, self.workspace)
         if url:
             result.escalated_issues.append(url)
         # Reset counter so we don't re-escalate every iteration

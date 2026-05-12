@@ -23,8 +23,8 @@ Request → [Interview] → [Spec Lock] → [Agent Loop] → [Validation] → Ar
 
 1. **Interview** — Multi-round clarification with hybrid ambiguity scoring (keyword coverage + contradiction detection + dimensional clarity)
 2. **Spec Lock** — `tasks.md` is generated and frozen; no scope changes mid-loop
-3. **Agent Loop** — `LoopController` feeds tasks one at a time to a fresh `claude` subprocess; no session carryover
-4. **Validation** — Configurable validator stack runs after each task: lint, types, tests, security, and (in `rtc` mode) device, network, fallback, firewall
+3. **Agent Loop** — `LoopController` feeds tasks one at a time to a fresh `claude` subprocess; no session carryover; step-by-step narration is always printed to stderr
+4. **Validation** — Configurable validator stack runs after each task: lint, types, tests, security, and (in `rtc` mode) device, network, fallback, firewall. Live/manual checks that require real users or production operation are excluded from automated QA tasks.
 5. **Artifact** — Pass/fail artifacts written to `storage/`; context hygiene enforced — each task sees only its own history
 
 ---

@@ -36,6 +36,11 @@ Score the implementation on three dimensions (0.0 = completely missing, 1.0 = pe
 - code_quality: Is the code clean, readable, and maintainable?
 - edge_cases: Are obvious edge cases and error conditions handled?
 
+Scope rule:
+- Evaluate only machine-checkable implementation quality. Do not fail an implementation solely
+  because live/manual validation would require real users, real participants, production traffic,
+  or actual operation outside the automated QA environment.
+
 Respond ONLY with valid JSON:
 {{
   "spec_adherence": <float>,

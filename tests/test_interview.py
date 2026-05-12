@@ -14,6 +14,10 @@ from interview.ambiguity import (
 )
 from interview.engine import InterviewEngine, InterviewSession, QuestionBlock
 from interview.risk import RiskDimensions, RiskResult, score_to_level
+from interview.validation_scope import (
+    exclude_runtime_only_validation_tasks,
+    requires_runtime_only_validation,
+)
 
 # ---------------------------------------------------------------------------
 # Stage 1 — Keyword coverage
@@ -251,6 +255,36 @@ def test_engine_validates_and_normalizes_letter_answer_to_option_text() -> None:
     assert engine._normalize_user_answer(session, "external partners") == "external partners"
 
 
+def test_runtime_only_validation_detection_catches_real_participant_checks() -> None:
+    assert requires_runtime_only_validation("실제 5명의 참가자가 모두 확인할 수 있어야 함")
+    assert requires_runtime_only_validation(
+        "Verify that all 5 real participants can confirm the call works"
+    )
+
+
+def test_runtime_only_validation_detection_allows_automated_simulation() -> None:
+    assert not requires_runtime_only_validation(
+        "Use Playwright to simulate 5 participants and verify screen-share state"
+    )
+
+
+def test_task_generation_sanitizer_excludes_runtime_only_validation_tasks() -> None:
+    tasks = "\n".join(
+        [
+            "- [ ] P1-01: Implement screen-share audio rendering",
+            "- [ ] P3-01: 실제 5명의 참가자가 모두 확인할 수 있어야 함",
+            "- [ ] P3-02: Use Playwright to simulate 5 participants and verify state",
+        ]
+    )
+
+    sanitized = exclude_runtime_only_validation_tasks(tasks)
+
+    assert "- [ ] P1-01: Implement screen-share audio rendering" in sanitized
+    assert "Excluded from automated QA" in sanitized
+    assert "- [ ] P3-01" not in sanitized
+    assert "- [ ] P3-02: Use Playwright to simulate 5 participants" in sanitized
+
+
 @pytest.mark.asyncio
 async def test_engine_rejects_empty_answer() -> None:
     engine = _make_engine("quick")
@@ -272,14 +306,25 @@ async def test_engine_step_completes_on_good_input() -> None:
     """Well-specified input should complete after Stage 3 scoring."""
     engine = _make_engine("quick")
 
-    dim_json = json.dumps({
-        "goal": 0.95, "constraint": 0.90, "risk": 0.85,
-        "environment": 0.90, "success": 0.90, "reasoning": "clear"
-    })
-    risk_json = json.dumps({
-        "security": 0.1, "network": 0.1, "state": 0.1,
-        "external_api": 0.1, "justification": "minimal risk"
-    })
+    dim_json = json.dumps(
+        {
+            "goal": 0.95,
+            "constraint": 0.90,
+            "risk": 0.85,
+            "environment": 0.90,
+            "success": 0.90,
+            "reasoning": "clear",
+        }
+    )
+    risk_json = json.dumps(
+        {
+            "security": 0.1,
+            "network": 0.1,
+            "state": 0.1,
+            "external_api": 0.1,
+            "justification": "minimal risk",
+        }
+    )
     _mock_call(engine, ["NONE", dim_json, risk_json])
 
     well_specified = (
@@ -300,9 +345,7 @@ async def test_engine_max_rounds_stops_loop() -> None:
     """Engine must not loop beyond max_interview_rounds."""
     engine = _make_engine("quick")  # max 5 rounds
     # Always return questions to simulate stuck interview
-    engine._call = MagicMock(  # type: ignore[method-assign]
-        side_effect=["Question 1?"] * 20
-    )
+    engine._call = MagicMock(side_effect=["Question 1?"] * 20)  # type: ignore[method-assign]
     session = engine.start("build me a thing")
     for _ in range(10):
         await engine.step(session, user_answer="I don't know")

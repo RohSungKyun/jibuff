@@ -25,6 +25,7 @@ from .ambiguity import (
     check_keyword_coverage,
 )
 from .risk import RiskDimensions, RiskResult
+from .validation_scope import exclude_runtime_only_validation_tasks
 
 _CHOICE_LINE_RE = re.compile(r"^\s*([abc])[\).:-]\s*(.+)$", flags=re.IGNORECASE)
 _CHOICE_INPUT_RE = re.compile(r"^\s*([a-z])\s*[\).:-]?\s*$", flags=re.IGNORECASE)
@@ -103,6 +104,10 @@ Rules:
 - Use this exact format per line: - [ ] P{{phase}}-{{nn}}: {{description}}
 - Phase groups: P0 (setup), P1 (core logic), P2 (features/API), P3 (tests & validation)
 - Maximum 20 tasks total. Descriptions must be specific and actionable.
+- Do not create executable tasks that require real users, live participants, production traffic,
+  manual confirmation, or actual-operation testing that cannot be verified by automated QA.
+- If such runtime-only validation is mentioned, omit it from the task list; it belongs in
+  non-blocking release notes or manual verification outside `tasks.md`.
 - Output ONLY the task list, no headings or preamble.
 """
 
@@ -249,10 +254,12 @@ class InterviewEngine:
         if user_answer is not None:
             if not self.validate_user_answer(session, user_answer):
                 raise ValueError("Invalid answer. Choose a/b/c or type a custom answer.")
-            session.transcript.append({
-                "role": "user",
-                "content": self._normalize_user_answer(session, user_answer),
-            })
+            session.transcript.append(
+                {
+                    "role": "user",
+                    "content": self._normalize_user_answer(session, user_answer),
+                }
+            )
             session.pending_question = None
 
         # Stage 1: keyword coverage
@@ -396,7 +403,7 @@ class InterviewEngine:
     def generate_tasks_md(self, session: InterviewSession) -> str:
         """Generate a spec/tasks.md from the completed interview session."""
         prompt = _TASK_GEN_PROMPT.format(requirements=session.full_text())
-        return self._call(prompt)
+        return exclude_runtime_only_validation_tasks(self._call(prompt))
 
     async def _score_risk(self, text: str) -> RiskResult:
         prompt = _RISK_PROMPT.format(requirements=text)

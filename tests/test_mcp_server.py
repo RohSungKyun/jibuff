@@ -227,6 +227,95 @@ def test_interview_mcp_session_file_roundtrip(tmp_path: Path) -> None:
     assert not state_file.exists()
 
 
+def test_interview_mcp_json_response_and_structured_answer(tmp_path: Path) -> None:
+    class FakeEngine:
+        def __init__(self, mode: str = "quick") -> None:
+            self.mode = mode
+
+        def start(self, request: str) -> InterviewSession:
+            from orchestrator.config import get_mode
+
+            return InterviewSession(mode=get_mode(self.mode), original_request=request)
+
+        async def step(
+            self,
+            session: InterviewSession,
+            user_answer: str | None = None,
+        ) -> list[str]:
+            if user_answer and session.pending_question:
+                session.transcript.append({
+                    "role": "user",
+                    "content": session.pending_question.resolve_answer(user_answer) or "",
+                })
+                session.pending_question = None
+
+            session.pending_question = QuestionBlock.from_text(
+                "Who is the user?\n"
+                "a) Admin\n"
+                "b) Guest\n"
+                "c) Operator\n"
+                "직접 입력: custom"
+            )
+            session.transcript.append({
+                "role": "assistant",
+                "content": session.pending_question.render(),
+            })
+            session.rounds += 1
+            return [session.pending_question.render()]
+
+        def generate_tasks_md(self, session: InterviewSession) -> str:
+            return "- [ ] P0-01: scaffold"
+
+    with patch("interview.engine.InterviewEngine", FakeEngine):
+        first = asyncio.run(handle_interview({
+            "request": "build a task CLI",
+            "workspace": str(tmp_path),
+            "response_format": "json",
+        }))
+
+    payload = json.loads(first)
+    assert payload["kind"] == "jibuff.interview.pending"
+    assert payload["status"] == "active"
+    assert payload["question"]["type"] == "single-answerable"
+    assert payload["question"]["allow_other"] is True
+    assert payload["question"]["options"][1] == {
+        "label": "Guest",
+        "value": "b",
+        "description": "Guest",
+    }
+    assert payload["question"]["fallback_text"].startswith("Who is the user?")
+
+    with patch("interview.engine.InterviewEngine", FakeEngine):
+        second = asyncio.run(handle_interview({
+            "session_id": payload["session_id"],
+            "revision": payload["revision"],
+            "answer": {"value": "b"},
+            "workspace": str(tmp_path),
+            "response_format": "json",
+        }))
+
+    continued = json.loads(second)
+    assert continued["revision"] == 2
+
+    state_file = Path(continued["state_file"])
+    state = json.loads(
+        state_file.read_text(encoding="utf-8").split("```json jibuff-session\n", 1)[1]
+        .split("\n```", 1)[0]
+    )
+    assert {"role": "user", "content": "Selected b: Guest"} in state["transcript"]
+
+
+def test_interview_rejects_unknown_response_format(tmp_path: Path) -> None:
+    result = asyncio.run(handle_interview({
+        "request": "build a task CLI",
+        "workspace": str(tmp_path),
+        "response_format": "yaml",
+    }))
+    assert "'response_format'" in result
+    assert "text" in result
+    assert "json" in result
+
+
 # ---------------------------------------------------------------------------
 # handle_run
 # ---------------------------------------------------------------------------

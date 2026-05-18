@@ -83,10 +83,27 @@ TOOLS: list[dict[str, object]] = [
                     "default": "quick",
                 },
                 "answer": {
-                    "type": "string",
+                    "oneOf": [
+                        {"type": "string"},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "value": {"type": "string"},
+                                "text": {"type": "string"},
+                                "custom": {"type": "string"},
+                            },
+                        },
+                    ],
                     "description": (
-                        "Answer to the previous round of questions (omit for first call)"
+                        "Answer to the previous round. Use a/b/c, custom text, "
+                        "or an object such as {'value': 'a'}."
                     ),
+                },
+                "response_format": {
+                    "type": "string",
+                    "enum": ["text", "json"],
+                    "description": "Return legacy text or a structured JSON payload.",
+                    "default": "text",
                 },
                 "action": {
                     "type": "string",
@@ -349,6 +366,36 @@ def _state_from_session(
     }
 
 
+def _answer_to_text(answer: object) -> str | None:
+    if answer is None:
+        return None
+    if isinstance(answer, dict):
+        for key in ("text", "custom"):
+            value = answer.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        value = answer.get("value")
+        return str(value) if value is not None else ""
+    return str(answer)
+
+
+def _question_payload(question: object, fallback_text: str = "") -> dict[str, object] | None:
+    if hasattr(question, "structured_payload"):
+        payload = question.structured_payload()
+        return payload if isinstance(payload, dict) else None
+
+    if question is None and fallback_text:
+        from interview.engine import QuestionBlock
+
+        return QuestionBlock.from_text(fallback_text).structured_payload()
+
+    return None
+
+
+def _json_response(payload: dict[str, object]) -> str:
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
 def _session_from_state(state: dict[str, object]) -> object:
     from interview.engine import InterviewSession, QuestionBlock
 
@@ -390,6 +437,7 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
     session_id = str(args.get("session_id", ""))
     mode = str(args.get("mode", "quick"))
     answer = args.get("answer")
+    response_format = str(args.get("response_format", "text"))
     action = str(args.get("action", "continue"))
     expected_revision = args.get("revision")
 
@@ -405,6 +453,9 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
             state_path = _session_path(workspace, session_id)
             state_path.unlink(missing_ok=True)
         return f"[jibuff interview] cancelled session_id: {session_id}"
+
+    if response_format not in {"text", "json"}:
+        return "Error: 'response_format' must be 'text' or 'json'."
 
     try:
         cfg = get_mode(mode)
@@ -466,7 +517,7 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
                 session = engine.start(request)
                 state_path = _session_path(workspace, session_id)
 
-            user_answer = str(answer) if answer is not None else None
+            user_answer = _answer_to_text(answer)
             questions = await engine.step(session, user_answer=user_answer)
             next_revision = revision + 1
 
@@ -475,6 +526,16 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
                 amb = session.last_ambiguity
                 amb_str = f"{amb.final_score:.2f}" if amb else "n/a"
                 state_path.unlink(missing_ok=True)
+                if response_format == "json":
+                    return _json_response({
+                        "kind": "jibuff.interview.complete",
+                        "session_id": session_id,
+                        "revision": next_revision,
+                        "mode": mode,
+                        "status": "complete",
+                        "ambiguity_score": amb_str,
+                        "tasks_md": tasks_md,
+                    })
                 return (
                     f"[jibuff interview] mode={mode} | threshold={cfg.ambiguity_threshold}\n"
                     f"session_id: {session_id}\n"
@@ -494,6 +555,25 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
                     created_at=created_at,
                 )
                 _atomic_write_text(state_path, _render_session_md(state))
+
+            if response_format == "json":
+                fallback_text = questions[0] if questions else ""
+                question = _question_payload(
+                    getattr(session, "pending_question", None),
+                    fallback_text=fallback_text,
+                )
+                return _json_response({
+                    "kind": "jibuff.interview.pending",
+                    "session_id": session_id,
+                    "revision": next_revision,
+                    "mode": mode,
+                    "status": "active",
+                    "round": int(getattr(session, "rounds", 0)),
+                    "threshold": cfg.ambiguity_threshold,
+                    "state_file": str(state_path),
+                    "question": question,
+                    "fallback_text": fallback_text,
+                })
 
             lines = [
                 f"[jibuff interview] mode={mode} | threshold={cfg.ambiguity_threshold}",

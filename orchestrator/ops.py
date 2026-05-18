@@ -35,6 +35,16 @@ validation-driven execution before handing work to an agent.
 - `jb inspect`: inspect task state, failure artifacts, and MCP interview sessions.
 - `jb doctor`: verify local jibuff readiness.
 
+## MCP structured interviews
+
+When MCP tools are available, prefer `jibuff_interview` with
+`response_format="json"` for in-session interviews. JSON responses include a
+transport-neutral `jibuff.interview.question` payload with three selectable
+options, `allow_other=true`, and `fallback_text` for clients that cannot render
+a structured question UI. Continue sessions with `session_id`, `revision`, and
+either a legacy string answer (`"a"`, `"b"`, custom text) or a structured answer
+such as `{"value": "a"}`.
+
 ## Workflow
 
 1. Run `jb interview` when the request is ambiguous.

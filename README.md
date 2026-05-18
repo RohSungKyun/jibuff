@@ -145,6 +145,14 @@ This exposes four tools to Claude Code:
 | `jibuff_status` | Query current loop state |
 | `jibuff_cancel` | Halt a running loop |
 
+`jibuff_interview` supports both legacy text output and structured interview
+payloads. Use `response_format: "json"` when the host agent can render
+structured choices. The JSON response includes a `jibuff.interview.question`
+object with three selectable options, `allow_other: true`, and `fallback_text`
+for plain-text clients. Continue with the returned `session_id` and `revision`,
+passing either `"a"`/`"b"`/`"c"`, custom text, or a structured answer such as
+`{"value": "a"}`.
+
 ---
 
 ## Spec directory layout

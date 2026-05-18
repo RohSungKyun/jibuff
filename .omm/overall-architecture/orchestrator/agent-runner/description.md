@@ -1,0 +1,1 @@
+Spawns the coding agent CLI as a subprocess in orchestrator/agent_runner.py. Resolves agent command via: --agent override → JIBUFF_AGENT_CMD env var → autodetect (claude first, then codex). Builds a task-scoped prompt including task ID, description, spec constitution reference, and optional failure context from the previous iteration.

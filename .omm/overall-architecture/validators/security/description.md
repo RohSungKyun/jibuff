@@ -1,0 +1,1 @@
+validators/security.py. Runs `bandit` (static security scan) and `pip-audit` (vulnerability scan of dependencies). Returns (False, combined output) if either tool finds issues. Part of the quick and rtc validator stacks.

@@ -1,0 +1,1 @@
+External coding agent CLI subprocess. Autodetected: claude (--dangerously-skip-permissions -p) or codex (exec --dangerously-bypass-approvals-and-sandbox). Override via --agent flag or JIBUFF_AGENT_CMD env var. Receives a task-scoped prompt; stdout/stderr are captured. Exit 0 = success. Timeout: 300s.

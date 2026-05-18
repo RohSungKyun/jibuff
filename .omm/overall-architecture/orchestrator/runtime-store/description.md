@@ -1,0 +1,1 @@
+orchestrator/runtime_store.py tracks in-flight run state across potential multi-worker scenarios. Writes a manifest JSON to storage/ with per-task claim/heartbeat info. Heartbeat context manager updates the store on a background interval so stale tasks can be detected and requeued by `jb recover`.

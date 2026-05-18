@@ -1,0 +1,9 @@
+created: 2026-05-18T03:06:56.199Z
+updated: 2026-05-18T03:06:56.200Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: config
+children: []
+parentPath:
+  - orchestrator

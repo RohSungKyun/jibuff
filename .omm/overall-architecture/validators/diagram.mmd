@@ -1,0 +1,25 @@
+graph TD
+    protocol["ValidatorProtocol\nrun(workspace) → (bool, str)"]
+
+    subgraph quick ["quick mode (4)"]
+        lint["Lint\nvalidators/lint.py\nruff check"]
+        types["Types\nvalidators/types.py\nmypy --strict"]
+        tests["Tests\nvalidators/tests.py\npytest"]
+        security["Security\nvalidators/security.py\nbandit + pip-audit"]
+    end
+
+    subgraph rtc ["rtc mode extra (4)"]
+        device["Device\nvalidators/device.py"]
+        network["Network\nvalidators/network.py"]
+        fallback["Fallback\nvalidators/fallback.py"]
+        firewall["Firewall\nvalidators/firewall.py"]
+    end
+
+    protocol --> lint
+    protocol --> types
+    protocol --> tests
+    protocol --> security
+    protocol --> device
+    protocol --> network
+    protocol --> fallback
+    protocol --> firewall

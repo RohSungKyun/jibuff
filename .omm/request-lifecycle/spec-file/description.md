@@ -1,0 +1,1 @@
+spec/tasks.md is the handoff artifact between Interview and Agent Loop phases. Format: markdown checklist lines `- [ ] P{phase}-{nn}: {description}`. Markers: [ ]=todo, [x]=done, [~]=in_progress, [!]=blocked. Users can also write this file manually without running the interview.

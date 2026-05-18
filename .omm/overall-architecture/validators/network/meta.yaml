@@ -1,0 +1,9 @@
+created: 2026-05-18T03:08:13.073Z
+updated: 2026-05-18T03:08:13.073Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: network
+children: []
+parentPath:
+  - validators

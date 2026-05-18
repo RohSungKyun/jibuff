@@ -1,0 +1,1 @@
+`jb inspect [--workspace DIR] [--json]`. Deep workspace audit: task list with statuses, last_failure presence, open issue count, MCP interview session list, and runtime_run manifest. --json outputs machine-readable payload for scripting.

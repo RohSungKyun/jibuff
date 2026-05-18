@@ -1,0 +1,1 @@
+storage/open_issues.json holds escalated issues as a JSON list. An issue is appended when consecutive failures on one task exceed the escalation_threshold (default 3). Each entry has task_id, gate name, truncated summary (200 chars), and timestamp. Read by ArtifactStore.task_context() to inject into agent prompts for the affected task.

@@ -1,0 +1,18 @@
+created: 2026-05-18T03:10:12.681Z
+updated: 2026-05-18T03:10:23.866Z
+update_count: 3
+last_field: context
+git_commit: ba9694c
+git_branch: chore/scan-architecture
+children:
+  - agent-output
+  - agent-prompt
+  - failure-md
+  - interview-state
+  - open-issues
+  - quality-result
+  - task-status
+  - tasks-md
+  - trace
+  - user-input
+  - validator-output

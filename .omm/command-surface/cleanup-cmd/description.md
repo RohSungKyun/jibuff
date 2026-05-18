@@ -1,0 +1,1 @@
+`jb cleanup [--workspace DIR] [--failures]`. Removes expired MCP interview session files (.jibuff/mcp/interviews/*.md) and orphan lock files. With --failures also removes last_failure.md and open_issues.json from storage/.

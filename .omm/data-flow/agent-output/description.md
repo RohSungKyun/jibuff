@@ -1,0 +1,1 @@
+The coding agent CLI's stdout + stderr captured by subprocess.run(). success=True when returncode==0. The stdout is passed to QualityEvaluator.evaluate() (capped at 4000 chars). The stderr is used in agent_unavailable detection (returncode==-1 and "not found" in stderr).

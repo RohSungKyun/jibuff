@@ -1,0 +1,15 @@
+graph LR
+    loop-controller["Loop Controller\norchestrator/loop_controller.py"]
+    agent-runner["Agent Runner\norchestrator/agent_runner.py"]
+    task-queue["Task Queue\norchestrator/task_queue.py"]
+    config["Mode Config\norchestrator/config.py"]
+    runtime-store["Runtime Store\norchestrator/runtime_store.py"]
+    ops["Ops Helpers\norchestrator/ops.py"]
+
+    classDef concern fill:#f38ba8,stroke:#f38ba8,color:#1e1e2e
+
+    loop-controller -->|"next / mark_done / requeue"| task-queue
+    loop-controller -->|"run(task)"| agent-runner
+    loop-controller -->|"get_mode()"| config
+    loop-controller -->|"heartbeat / claim"| runtime-store
+    ops -->|"doctor / inspect / cleanup / recover"| task-queue

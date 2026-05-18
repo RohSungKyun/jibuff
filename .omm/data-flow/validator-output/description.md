@@ -1,0 +1,1 @@
+Each validator returns (ok: bool, output: str). LoopController._run_validators() collects all (False, output) pairs into a dict keyed by validator name. This dict is written to last_failure.md and stored in the trace. The run continues only if all validators return (True, _).

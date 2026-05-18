@@ -1,0 +1,4 @@
+- Python 3.12+, ruff + black + mypy strict, line length 100
+- Agent subprocess is always `claude --dangerously-skip-permissions -p` or `codex exec --dangerously-bypass-approvals-and-sandbox` — no agent SDK is used directly
+- LLM calls go through OpenRouter API (not Anthropic API directly) via openai SDK
+- All validators implement ValidatorProtocol.run(workspace) -> tuple[bool, str]

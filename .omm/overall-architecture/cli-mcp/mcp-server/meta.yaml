@@ -1,0 +1,9 @@
+created: 2026-05-18T03:06:15.919Z
+updated: 2026-05-18T03:06:15.920Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: mcp-server
+children: []
+parentPath:
+  - cli-mcp

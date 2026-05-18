@@ -1,0 +1,1 @@
+`jb setup [--check] [--unregister]`. Registers jibuff as an MCP server in Claude Code (user scope) via `claude mcp add`. --check verifies current registration. --unregister removes it. Propagates OPENROUTER_API_KEY into the MCP server env if set.

@@ -1,0 +1,1 @@
+storage/artifacts.py provides ArtifactStore — reads and writes all structured artifacts for a jibuff session: task_status.json (task state with claim tokens), open_issues.json (escalated issues), decision_log.md (rationale entries), and last_failure.md (written by reporters/failure_report.py). Provides task_context() to inject only task-scoped artifacts into agent prompts.

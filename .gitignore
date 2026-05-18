@@ -13,12 +13,14 @@ build/
 venv/
 # jibuff runtime artifacts
 .jibuff/
+CLAUDE.md
 workspace/*
 !workspace/.gitkeep
 storage/state.json
 storage/task_status.json
 storage/last_failure.md
 storage/progress.md
+storage/cancelled.md
 storage/open_issues.json
 storage/decision_log.md
 storage/traces/

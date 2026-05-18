@@ -1,0 +1,1 @@
+Validation layer in validators/. All validators implement ValidatorProtocol.run(workspace: Path) -> tuple[bool, str]. quick mode runs 4: lint (ruff), types (mypy), tests (pytest), security (bandit+pip-audit). rtc mode adds 4 more: device (hardware/platform checks), network (connectivity checks), fallback (graceful-degradation smoke tests), firewall (network policy checks).

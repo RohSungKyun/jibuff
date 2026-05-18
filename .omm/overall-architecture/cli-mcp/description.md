@@ -1,0 +1,1 @@
+Entry point layer. `orchestrator/main.py` is a Typer CLI exposing commands: interview, run, status, doctor, inspect, cleanup, recover, setup-skill, setup, and `mcp serve`. `jibuff_mcp/server.py` is an MCP stdio server with four tools (jibuff_interview, jibuff_run, jibuff_status, jibuff_cancel) that Claude Code uses. Both converge on the same Orchestrator and Interview internals.

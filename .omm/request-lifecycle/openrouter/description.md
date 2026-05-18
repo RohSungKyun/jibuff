@@ -1,0 +1,1 @@
+OpenRouter LLM gateway (https://openrouter.ai/api/v1) used via the openai SDK with model="openrouter/auto". Called for: question generation, contradiction detection, dimensional scoring, risk scoring, task generation, and quality evaluation. Requires OPENROUTER_API_KEY env var. All calls use temperature=0 for determinism.

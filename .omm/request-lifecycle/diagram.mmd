@@ -1,0 +1,33 @@
+graph LR
+    user["User\nCLI or Claude Code"]
+    interview-phase["Interview Phase\ninterview/engine.py"]
+    openrouter["OpenRouter LLM\nopenrouter/auto"]
+    spec-file["spec/tasks.md\nWorkspace file"]
+    agent-loop["Agent Loop\norchestrator/loop_controller.py"]
+    agent-cli["Agent CLI\nclaude / codex subprocess"]
+    validators-run["Validators\nvalidators/*.py"]
+    ralph["Quality Gate (rtc)\nevaluators/quality.py"]
+    storage-out["Storage Artifacts\nstorage/"]
+
+    classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+    classDef external fill:#585b70,stroke:#585b70,color:#cdd6f4
+    classDef store fill:#a6e3a1,stroke:#a6e3a1,color:#1e1e2e
+    classDef concern fill:#f38ba8,stroke:#f38ba8,color:#1e1e2e
+
+    class user entry
+    class openrouter external
+    class spec-file,storage-out store
+    class ralph concern
+
+    user -->|"jb interview / jibuff_interview"| interview-phase
+    interview-phase -->|"ambiguity / risk scoring"| openrouter
+    openrouter -->|"scores + questions"| interview-phase
+    interview-phase -->|"generates task list"| spec-file
+    spec-file -->|"jb run reads tasks"| agent-loop
+    agent-loop -->|"task-scoped prompt subprocess"| agent-cli
+    agent-cli -->|"code changes + exit 0/1"| agent-loop
+    agent-loop -->|"ruff / mypy / pytest / bandit"| validators-run
+    validators-run -->|"pass / fail + output"| agent-loop
+    agent-loop -->|"score agent output (rtc only)"| ralph
+    ralph -->|"QualityResult"| agent-loop
+    agent-loop -->|"write task_status / failure / trace"| storage-out

@@ -1,0 +1,1 @@
+QualityResult dataclass from evaluators/quality.py. Fields: score (weighted float), spec_adherence/code_quality/edge_cases (raw floats), feedback (one-sentence string), passed (bool), threshold. QualityResult.context() formats this into a failure summary injected into the next agent prompt on ralph-cycle failure.

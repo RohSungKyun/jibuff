@@ -1,0 +1,1 @@
+interview/risk.py. Scores technical risk across 4 dimensions (security, network, state, external_api) using an LLM call. RiskResult.from_dimensions() computes a weighted average score and compares against the mode's risk_gate threshold. In quick mode the risk gate is None (always passes). In rtc mode the gate is 0.4.

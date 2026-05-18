@@ -1,0 +1,1 @@
+Typer-based CLI with entry points `jb` and `jibuff`. Commands: interview (structured Q&A → spec/tasks.md), run (agent loop), status (progress), doctor (readiness check), inspect (workspace audit), cleanup (expire MCP sessions/locks), recover (requeue stale tasks), setup (register MCP in Claude Code), setup-skill (install Codex SKILL.md). Entry point: orchestrator/main.py.

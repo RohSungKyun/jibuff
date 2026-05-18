@@ -1,0 +1,1 @@
+storage/ directory holds all run artifacts: task_status.json (live task state with claim tokens and heartbeats), last_failure.md (structured validator error report for prompt injection), open_issues.json (escalated task issues), traces/ (per-task iteration traces), progress.json, and cancelled.md. Written by reporters/ and ArtifactStore.

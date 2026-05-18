@@ -1,0 +1,1 @@
+storage/last_failure.md is written by reporters/failure_report.py on any validator or agent failure. Contains a structured summary of which validators failed and their output, truncated for prompt size. Injected verbatim into the next iteration's agent prompt via AgentRunner._build_prompt(). Cleared when a task passes.

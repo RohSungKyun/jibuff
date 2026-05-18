@@ -1,0 +1,10 @@
+created: 2026-05-18T03:05:57.165Z
+updated: 2026-05-18T03:06:02.358Z
+update_count: 2
+last_field: diagram
+kind: nested-class
+title: cli-mcp
+children:
+  - cli
+  - mcp-server
+parentPath: []

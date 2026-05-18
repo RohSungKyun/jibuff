@@ -1,0 +1,1 @@
+orchestrator/config.py defines ModeConfig dataclass and get_mode() factory. Two named modes: quick (ambiguity_threshold=0.25, no risk_gate, no quality_threshold, max_interview_rounds=3) and rtc (ambiguity_threshold=0.15, risk_gate=0.4, quality_threshold=0.7, max_quality_retries=2, max_interview_rounds=5).

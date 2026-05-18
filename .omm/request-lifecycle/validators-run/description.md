@@ -1,0 +1,1 @@
+Validator stack (4 in quick, 8 in rtc) run sequentially after each agent execution. Each validator shells out to a tool (ruff, mypy, pytest, bandit, etc.) and returns (bool, str). Errors from all failing validators are collected and written to last_failure.md via reporters/failure_report.py to feed the next iteration's prompt.

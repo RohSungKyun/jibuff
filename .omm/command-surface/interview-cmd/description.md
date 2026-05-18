@@ -1,0 +1,1 @@
+`jb interview "request" [--mode quick|rtc] [--workspace DIR]`. Starts the structured Q&A loop via InterviewEngine. Presents a/b/c choice questions until ambiguity and risk thresholds are met (or max rounds reached). Writes the result to spec/tasks.md. In MCP mode the equivalent is the jibuff_interview tool which persists session state as workspace-local markdown files.

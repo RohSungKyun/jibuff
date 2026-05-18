@@ -142,6 +142,8 @@ This exposes four tools to Claude Code:
 |---|---|
 | `jibuff_interview` | Start or continue an interview session |
 | `jibuff_run` | Execute the loop for a spec |
+| `jibuff_next_task` | Claim the next task for the current AI agent session |
+| `jibuff_finish_task` | Validate and finish an in-session task |
 | `jibuff_status` | Query current loop state |
 | `jibuff_cancel` | Halt a running loop |
 
@@ -152,6 +154,14 @@ object with three selectable options, `allow_other: true`, and `fallback_text`
 for plain-text clients. Continue with the returned `session_id` and `revision`,
 passing either `"a"`/`"b"`/`"c"`, custom text, or a structured answer such as
 `{"value": "a"}`.
+
+For agent-internal execution, use `jibuff_next_task` and `jibuff_finish_task`
+instead of `jibuff_run`. `jibuff_run` keeps the original external CLI
+orchestration path and spawns the configured agent command. The in-session path
+claims a task for the current AI agent, lets that same session edit the
+workspace, then validates and marks the task done or requeues it. Every finish
+response includes `next_guide`, which tells the agent whether to claim the next
+task, fix validator failures, or summarize final completion.
 
 ---
 

@@ -35,6 +35,24 @@ validation-driven execution before handing work to an agent.
 - `jb inspect`: inspect task state, failure artifacts, and MCP interview sessions.
 - `jb doctor`: verify local jibuff readiness.
 
+## In-session agent loop
+
+Use this path when jibuff should run inside the current AI agent session rather
+than spawning an external `claude` or `codex` subprocess. This mirrors an
+OMX-style workflow while keeping state in `.jibuff`/`storage`.
+
+1. Use `jibuff_interview` with `response_format="json"` until it returns
+   generated tasks.
+2. Write or review `spec/tasks.md`.
+3. Call `jibuff_next_task` to claim the next task for the current session.
+4. Implement only the claimed task directly in the current agent session.
+5. Call `jibuff_finish_task` with the returned `task_id` and `claim_token`.
+6. Follow the returned `next_guide`: claim the next task, fix a requeued task,
+   or summarize completion when all tasks are done.
+
+Do not call `jibuff_run` for in-session execution; `jibuff_run` intentionally
+uses the external agent CLI runner.
+
 ## MCP structured interviews
 
 When MCP tools are available, prefer `jibuff_interview` with

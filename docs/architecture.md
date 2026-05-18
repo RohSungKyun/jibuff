@@ -54,6 +54,15 @@ jibuff is a **6-layer workflow harness** that sits between a human developer and
 └─────────────────────────────────────────┘
 ```
 
+The MCP surface also supports an in-session execution path for hosts such as
+Codex or Claude Code. In that mode, `jibuff_next_task` claims the next
+`TaskQueue` item and returns a task-scoped guide to the current AI agent. The
+agent edits the workspace directly in the same session, then calls
+`jibuff_finish_task` to run validators and either mark the task done or requeue
+it with a failure report. This path keeps the original `.jibuff`/`storage`
+state model but does not spawn the external `AgentRunner` subprocess used by
+`jibuff_run`.
+
 ---
 
 ## Directory Structure
@@ -184,12 +193,15 @@ Optional: Docker container for full process isolation (recommended for RTC netwo
 
 ## MCP Integration
 
-jibuff exposes four MCP tools for use inside Claude Code sessions:
+jibuff exposes MCP tools for use inside Claude Code, Codex, and other MCP
+client sessions:
 
 | Tool | Description |
 |------|-------------|
 | `jibuff_interview` | Start or continue an interview session |
 | `jibuff_run` | Execute the loop for a given spec |
+| `jibuff_next_task` | Claim the next task for the current AI agent session |
+| `jibuff_finish_task` | Validate and finish an in-session task |
 | `jibuff_status` | Query current loop state |
 | `jibuff_cancel` | Halt a running loop |
 

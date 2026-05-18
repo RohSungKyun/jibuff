@@ -14,7 +14,9 @@ from interview.engine import InterviewSession, QuestionBlock
 from jibuff_mcp.server import (
     TOOLS,
     handle_cancel,
+    handle_finish_task,
     handle_interview,
+    handle_next_task,
     handle_run,
     handle_status,
 )
@@ -28,6 +30,8 @@ def test_tools_defined() -> None:
     names = {t["name"] for t in TOOLS}
     assert "jibuff_interview" in names
     assert "jibuff_run" in names
+    assert "jibuff_next_task" in names
+    assert "jibuff_finish_task" in names
     assert "jibuff_status" in names
     assert "jibuff_cancel" in names
 
@@ -347,6 +351,101 @@ def test_run_uses_cwd_when_no_workspace(tmp_path: Path) -> None:
     tasks.write_text("- [ ] P0-01: test\n", encoding="utf-8")
     result = handle_run({"dry_run": True}, cwd=tmp_path)
     assert "Setup OK" in result
+
+
+# ---------------------------------------------------------------------------
+# in-session task execution
+# ---------------------------------------------------------------------------
+
+
+def test_next_task_claims_task_for_in_session_agent(tmp_path: Path) -> None:
+    tasks = tmp_path / "spec" / "tasks.md"
+    tasks.parent.mkdir(parents=True)
+    tasks.write_text("- [ ] P0-01: test task\n", encoding="utf-8")
+
+    result = handle_next_task({
+        "workspace": str(tmp_path),
+        "worker_id": "codex-session",
+        "response_format": "json",
+    }, cwd=tmp_path)
+
+    payload = json.loads(result)
+    assert payload["kind"] == "jibuff.in_session.task"
+    assert payload["status"] == "claimed"
+    assert payload["task"]["id"] == "P0-01"
+    assert payload["task"]["claimed_by"] == "codex-session"
+    assert payload["claim_token"]
+    assert "jibuff_finish_task" in payload["next_guide"]
+
+
+def test_next_task_reports_completion_guide_when_all_done(tmp_path: Path) -> None:
+    tasks = tmp_path / "spec" / "tasks.md"
+    tasks.parent.mkdir(parents=True)
+    tasks.write_text("- [x] P0-01: done task\n", encoding="utf-8")
+
+    result = handle_next_task({
+        "workspace": str(tmp_path),
+        "response_format": "json",
+    }, cwd=tmp_path)
+
+    payload = json.loads(result)
+    assert payload["kind"] == "jibuff.in_session.empty"
+    assert payload["status"] == "empty"
+    assert "All tasks are complete" in payload["next_guide"]
+
+
+def test_finish_task_marks_done_without_external_agent(tmp_path: Path) -> None:
+    tasks = tmp_path / "spec" / "tasks.md"
+    tasks.parent.mkdir(parents=True)
+    tasks.write_text("- [ ] P0-01: test task\n", encoding="utf-8")
+    claimed = json.loads(handle_next_task({
+        "workspace": str(tmp_path),
+        "response_format": "json",
+    }, cwd=tmp_path))
+
+    result = handle_finish_task({
+        "workspace": str(tmp_path),
+        "task_id": "P0-01",
+        "claim_token": claimed["claim_token"],
+        "validate": False,
+        "response_format": "json",
+    }, cwd=tmp_path)
+
+    payload = json.loads(result)
+    assert payload["kind"] == "jibuff.in_session.finish"
+    assert payload["status"] == "passed"
+    assert payload["all_done"] is True
+    assert "All tasks are complete" in payload["next_guide"]
+
+    status = json.loads((tmp_path / "storage" / "task_status.json").read_text())
+    assert status["tasks"][0]["status"] == "done"
+
+
+def test_finish_task_requeues_on_validator_failure(tmp_path: Path) -> None:
+    tasks = tmp_path / "spec" / "tasks.md"
+    tasks.parent.mkdir(parents=True)
+    tasks.write_text("- [ ] P0-01: test task\n", encoding="utf-8")
+    claimed = json.loads(handle_next_task({
+        "workspace": str(tmp_path),
+        "response_format": "json",
+    }, cwd=tmp_path))
+
+    with patch("jibuff_mcp.server._run_validator_stack", return_value={"tests": "boom"}):
+        result = handle_finish_task({
+            "workspace": str(tmp_path),
+            "task_id": "P0-01",
+            "claim_token": claimed["claim_token"],
+            "response_format": "json",
+        }, cwd=tmp_path)
+
+    payload = json.loads(result)
+    assert payload["status"] == "failed"
+    assert payload["validator_errors"] == {"tests": "boom"}
+    assert "requeued" in payload["next_guide"]
+    assert (tmp_path / "storage" / "last_failure.md").exists()
+
+    status = json.loads((tmp_path / "storage" / "task_status.json").read_text())
+    assert status["tasks"][0]["status"] == "todo"
 
 
 # ---------------------------------------------------------------------------

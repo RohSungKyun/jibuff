@@ -9,6 +9,7 @@ from orchestrator.ops import (
     cleanup_workspace,
     inspect_workspace,
     install_skill,
+    internal_run_guide,
     recover_workspace,
 )
 from orchestrator.runtime_store import RuntimeStore
@@ -104,3 +105,11 @@ def test_install_skill_writes_skill_md(tmp_path: Path) -> None:
     assert "name: jibuff" in content
     assert "description:" in content
     assert "jb interview" in content
+
+
+def test_internal_run_guide_mentions_next_and_finish_tools() -> None:
+    guide = internal_run_guide()
+    assert "jibuff_next_task" in guide
+    assert "jibuff_finish_task" in guide
+    assert "next_guide" in guide
+    assert "Do not spawn an external agent CLI" in guide

@@ -84,6 +84,7 @@ jb interview "Add WebRTC screen sharing to the dashboard"
 jb interview "Add WebRTC screen sharing" --mode rtc   # RTC mode
 
 # Step 2: run the agent loop against spec/tasks.md
+jb run --internal                  # current AI agent session loop
 jb run
 jb run --mode rtc
 jb run --no-commit                       # skip auto git commit per task
@@ -155,13 +156,15 @@ for plain-text clients. Continue with the returned `session_id` and `revision`,
 passing either `"a"`/`"b"`/`"c"`, custom text, or a structured answer such as
 `{"value": "a"}`.
 
-For agent-internal execution, use `jibuff_next_task` and `jibuff_finish_task`
-instead of `jibuff_run`. `jibuff_run` keeps the original external CLI
-orchestration path and spawns the configured agent command. The in-session path
-claims a task for the current AI agent, lets that same session edit the
-workspace, then validates and marks the task done or requeues it. Every finish
-response includes `next_guide`, which tells the agent whether to claim the next
-task, fix validator failures, or summarize final completion.
+For agent-internal execution, `/jb run` or `$jb run` style agent workflows
+should use `jibuff_next_task` and `jibuff_finish_task`. The matching CLI-facing
+handoff is `jb run --internal`, which prints the in-session loop guide instead
+of spawning an external agent. Plain `jb run` and MCP `jibuff_run` keep the
+original external CLI orchestration path for backwards compatibility. The
+in-session path claims a task for the current AI agent, lets that same session
+edit the workspace, then validates and marks the task done or requeues it.
+Every finish response includes `next_guide`, which tells the agent whether to
+claim the next task, fix validator failures, or summarize final completion.
 
 ---
 

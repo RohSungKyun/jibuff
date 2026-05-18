@@ -55,13 +55,15 @@ jibuff is a **6-layer workflow harness** that sits between a human developer and
 ```
 
 The MCP surface also supports an in-session execution path for hosts such as
-Codex or Claude Code. In that mode, `jibuff_next_task` claims the next
-`TaskQueue` item and returns a task-scoped guide to the current AI agent. The
-agent edits the workspace directly in the same session, then calls
+Codex or Claude Code. In that mode, `/jb run` or `$jb run` style agent workflows
+should claim work through `jibuff_next_task`; the CLI-facing equivalent is
+`jb run --internal`, which prints the in-session handoff guide. `jibuff_next_task`
+claims the next `TaskQueue` item and returns a task-scoped guide to the current
+AI agent. The agent edits the workspace directly in the same session, then calls
 `jibuff_finish_task` to run validators and either mark the task done or requeue
 it with a failure report. This path keeps the original `.jibuff`/`storage`
 state model but does not spawn the external `AgentRunner` subprocess used by
-`jibuff_run`.
+plain `jb run` / `jibuff_run`.
 
 ---
 

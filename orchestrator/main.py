@@ -113,6 +113,16 @@ def run(
     workspace: Annotated[str, typer.Option(help="Workspace directory (default: cwd)")] = "",
     max_iterations: Annotated[int, typer.Option(help="Max loop iterations")] = 30,
     no_commit: Annotated[bool, typer.Option("--no-commit", help="Skip auto git commit")] = False,
+    internal: Annotated[
+        bool,
+        typer.Option(
+            "--internal",
+            help=(
+                "Use the current AI agent session loop. Prints next_task/finish_task "
+                "handoff guidance instead of spawning an external agent CLI."
+            ),
+        ),
+    ] = False,
     agent: Annotated[
         str,
         typer.Option(
@@ -160,6 +170,13 @@ def run(
 
     if queue.all_done():
         typer.echo("[jibuff] All tasks already complete.")
+        return
+
+    if internal:
+        from orchestrator.ops import internal_run_guide
+
+        typer.echo(internal_run_guide())
+        typer.echo("Next MCP call: jibuff_next_task")
         return
 
     try:

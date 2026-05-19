@@ -1,0 +1,1 @@
+QualityEvaluator (evaluators/quality.py) — the "ralph cycle". Only active in rtc mode (quality_threshold=0.7). Scores agent output on spec_adherence (50%), code_quality (30%), edge_cases (20%) via LLM. If score < 0.7, feedback is injected into the next prompt. Max 2 retries per task before the loop moves on.

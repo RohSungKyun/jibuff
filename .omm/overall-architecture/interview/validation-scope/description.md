@@ -1,0 +1,1 @@
+interview/validation_scope.py. Post-processing filter applied after task generation. Strips tasks that require live users, production traffic, manual confirmation, or real-operation testing — these cannot be verified by automated QA and would block the agent loop. Stripped tasks are replaced by a note directing them to release notes or manual verification.

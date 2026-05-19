@@ -1,0 +1,1 @@
+Ambiguity resolution layer in interview/. InterviewEngine runs a 3-stage pipeline against the user's request: Stage 1 (keyword coverage check, free), Stage 2 (contradiction detection via LLM), Stage 3 (dimensional clarity scoring + risk indexing, async parallel). Drives a Socratic Q&A loop until ambiguity/risk thresholds are met, then generates spec/tasks.md.

@@ -1,0 +1,10 @@
+graph LR
+    engine["Interview Engine\ninterview/engine.py"]
+    ambiguity["Ambiguity Scorer\ninterview/ambiguity.py"]
+    risk["Risk Indexer\ninterview/risk.py"]
+    validation-scope["Validation Scope Filter\ninterview/validation_scope.py"]
+
+    engine -->|"check_keyword_coverage()"| ambiguity
+    engine -->|"score_dimensions() async"| ambiguity
+    engine -->|"score_risk() async"| risk
+    engine -->|"exclude_runtime_only_tasks()"| validation-scope

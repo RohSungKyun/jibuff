@@ -1,0 +1,1 @@
+Drives the main task cycle in orchestrator/loop_controller.py. Per iteration: claims next task from TaskQueue, runs AgentRunner, runs all validators, optionally runs quality evaluator (ralph cycle), then marks done or requeues. Tracks consecutive failures and calls escalation handler when threshold is reached. Emits git commit on task pass when auto_commit=True.

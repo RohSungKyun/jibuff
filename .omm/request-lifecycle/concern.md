@@ -1,0 +1,1 @@
+The agent subprocess runs with --dangerously-skip-permissions / --dangerously-bypass-approvals-and-sandbox. If the agent CLI is misconfigured or the model behaves unexpectedly, there is no sandbox around file system mutations. Escalation (GitHub issue creation) is the only human-in-the-loop fallback after consecutive failures.

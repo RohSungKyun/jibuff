@@ -1,0 +1,1 @@
+LoopController.run() in orchestrator/loop_controller.py. Dequeues next todo task, claims it (optimistic concurrency), spawns agent subprocess, runs validators, optionally runs quality evaluator, then marks done or requeues. Escalation fires after escalation_threshold (default 3) consecutive failures on one task. Max iterations defaults to 30.

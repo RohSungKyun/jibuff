@@ -1,0 +1,17 @@
+created: 2026-05-18T03:08:33.431Z
+updated: 2026-05-18T03:08:38.993Z
+update_count: 2
+last_field: description
+git_commit: ba9694c
+git_branch: chore/scan-architecture
+children:
+  - cleanup-cmd
+  - doctor-cmd
+  - inspect-cmd
+  - interview-cmd
+  - mcp-serve-cmd
+  - recover-cmd
+  - run-cmd
+  - setup-cmd
+  - setup-skill-cmd
+  - status-cmd

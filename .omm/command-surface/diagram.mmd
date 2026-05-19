@@ -1,0 +1,26 @@
+graph TD
+    jb["jb / jibuff\nCLI entry"]
+    interview-cmd["interview\njb interview 'request'"]
+    run-cmd["run\njb run [--mode rtc]"]
+    status-cmd["status\njb status"]
+    doctor-cmd["doctor\njb doctor"]
+    inspect-cmd["inspect\njb inspect [--json]"]
+    cleanup-cmd["cleanup\njb cleanup [--failures]"]
+    recover-cmd["recover\njb recover"]
+    setup-cmd["setup\njb setup [--check|--unregister]"]
+    setup-skill-cmd["setup-skill\njb setup-skill"]
+    mcp-serve-cmd["mcp serve\njb mcp serve"]
+
+    classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+    class jb entry
+
+    jb --> interview-cmd
+    jb --> run-cmd
+    jb --> status-cmd
+    jb --> doctor-cmd
+    jb --> inspect-cmd
+    jb --> cleanup-cmd
+    jb --> recover-cmd
+    jb --> setup-cmd
+    jb --> setup-skill-cmd
+    jb --> mcp-serve-cmd

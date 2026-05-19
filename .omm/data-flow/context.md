@@ -1,0 +1,1 @@
+Key design principle: no full conversation logs are ever persisted — only structured summaries. The agent never sees prior task outputs; it only sees the task description + failure context from the immediately preceding iteration. This keeps prompt size bounded and prevents context contamination across tasks.

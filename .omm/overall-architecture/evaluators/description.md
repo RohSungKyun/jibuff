@@ -1,0 +1,1 @@
+evaluators/quality.py contains QualityEvaluator — the "ralph cycle" quality gate active only in rtc mode. After validators pass, it scores agent output across 3 dimensions (spec_adherence 50%, code_quality 30%, edge_cases 20%) via an LLM call. If the weighted score < threshold (0.7), the task is requeued with a feedback context injected into the next agent prompt. Max retries: 2.

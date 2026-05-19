@@ -1,0 +1,23 @@
+graph LR
+    cli-mcp["CLI / MCP\norchestrator/main.py\njibuff_mcp/server.py"]
+    orchestrator["Orchestrator\norchestrator/"]
+    interview["Interview\ninterview/"]
+    validators["Validators\nvalidators/"]
+    evaluators["Evaluators\nevaluators/"]
+    storage["Storage\nstorage/"]
+
+    classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+    classDef store fill:#a6e3a1,stroke:#a6e3a1,color:#1e1e2e
+    classDef external fill:#585b70,stroke:#585b70,color:#cdd6f4
+
+    class cli-mcp entry
+    class storage store
+
+    cli-mcp -->|"interview request"| interview
+    cli-mcp -->|"run / status / cancel"| orchestrator
+    interview -->|"clarified spec (tasks.md)"| orchestrator
+    orchestrator -->|"run validators"| validators
+    orchestrator -->|"ralph quality gate"| evaluators
+    orchestrator -->|"write artifacts"| storage
+    validators -->|"pass/fail + output"| orchestrator
+    evaluators -->|"QualityResult"| orchestrator

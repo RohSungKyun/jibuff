@@ -181,6 +181,27 @@ class QuestionBlock:
         lines.append(self.custom_label)
         return "\n".join(lines)
 
+    def structured_payload(self) -> dict[str, object]:
+        """Return a transport-neutral single-choice question payload."""
+        other_label = self.custom_label.split(":", 1)[0].strip() or "직접 입력"
+        return {
+            "kind": "jibuff.interview.question",
+            "question": self.question,
+            "type": "single-answerable",
+            "options": [
+                {
+                    "label": self.choices[key],
+                    "value": key,
+                    "description": self.choices[key],
+                }
+                for key in ("a", "b", "c")
+                if key in self.choices
+            ],
+            "allow_other": True,
+            "other_label": other_label,
+            "fallback_text": self.render(),
+        }
+
     def resolve_answer(self, answer: str) -> str | None:
         """Return normalized answer text, or None when a selection is invalid."""
         cleaned = answer.strip()

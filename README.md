@@ -23,7 +23,7 @@ Request → [Interview] → [Spec Lock] → [Agent Loop] → [Validation] → Ar
 
 1. **Interview** — Multi-round clarification with hybrid ambiguity scoring (keyword coverage + contradiction detection + dimensional clarity)
 2. **Spec Lock** — `tasks.md` is generated and frozen; no scope changes mid-loop
-3. **Agent Loop** — `LoopController` feeds tasks one at a time to a fresh `claude` subprocess; no session carryover; step-by-step narration is always printed to stderr
+3. **Agent Loop** — The current AI agent drives the loop via MCP tools: claim a task, implement it, validate, mark done. Each task is isolated — the agent sees only its own context per task.
 4. **Validation** — Configurable validator stack runs after each task: lint, types, tests, security, and (in `rtc` mode) device, network, fallback, firewall. Live/manual checks that require real users or production operation are excluded from automated QA tasks.
 5. **Artifact** — Pass/fail artifacts written to `storage/`; context hygiene enforced — each task sees only its own history
 
@@ -68,7 +68,7 @@ pip install "jibuff[rtc]"         # + RTC validators (Playwright)
 pip install "jibuff[all]"         # everything
 ```
 
-Requires Python ≥ 3.12 and a coding-agent CLI on PATH — `claude` (`npm install -g @anthropic-ai/claude-code`) or `codex`. jibuff auto-detects in that order.
+Requires Python ≥ 3.12. For MCP in-session usage, register jibuff as an MCP server inside Claude Code or Codex (see below). For CLI-only usage, a coding-agent CLI on PATH is also supported — `claude` or `codex`, auto-detected in that order.
 
 Both `jibuff` and the short alias `jb` are available after installation.
 
@@ -76,41 +76,9 @@ Both `jibuff` and the short alias `jb` are available after installation.
 
 ## Usage
 
-### CLI
+### Quick start (in-session, MCP)
 
-```bash
-# Step 1: clarify requirements → generates spec/tasks.md
-jb interview "Add WebRTC screen sharing to the dashboard"
-jb interview "Add WebRTC screen sharing" --mode rtc   # RTC mode
-
-# Step 2: run the agent loop against spec/tasks.md
-jb run
-jb run --mode rtc
-jb run --no-commit                       # skip auto git commit per task
-jb run --agent "codex exec"              # override agent CLI for this run
-JIBUFF_AGENT_CMD="codex exec" jb run     # or set globally via env var
-
-# Check current loop state
-jb status
-
-# Diagnose and inspect runtime state
-jb doctor
-jb inspect
-jb recover
-jb recover --stale-after-minutes 10
-jb recover --force
-jb cleanup
-
-# Install a thin Codex skill wrapper for in-session discovery
-jb setup-skill
-
-# (jibuff is also available as a full-name alias)
-jibuff --help
-```
-
-### MCP server
-
-Register jibuff as an MCP server inside Claude Code:
+Register jibuff as an MCP server inside Claude Code or Codex:
 
 ```json
 {
@@ -136,14 +104,69 @@ Or with `uvx`:
 }
 ```
 
-This exposes four tools to Claude Code:
+Once registered, the agent drives the full loop from within the session — no external process is spawned:
+
+```
+# 1. Clarify requirements and generate spec/tasks.md
+jibuff_interview  request="Add WebRTC screen sharing"  response_format="json"
+  → answer questions until status="complete"
+  → spec/tasks.md is written automatically
+
+# 2. Initialize the run
+jibuff_run  response_format="json"
+  → returns run_id and next_guide
+
+# 3. Claim → implement → finish, repeat until all_done
+jibuff_next_task  worker_id="my-session"  response_format="json"
+  → returns task, claim_token
+
+  [ implement the task in this session ]
+
+jibuff_finish_task  task_id="P0-01"  claim_token="..."  worker_id="my-session"
+  → validates, marks done or requeues; follow next_guide
+```
+
+This exposes six tools to the agent:
 
 | Tool | Description |
 |---|---|
-| `jibuff_interview` | Start or continue an interview session |
-| `jibuff_run` | Execute the loop for a spec |
-| `jibuff_status` | Query current loop state |
+| `jibuff_interview` | Clarify requirements and generate `spec/tasks.md` |
+| `jibuff_run` | Initialize the in-session run; returns the task-loop guide |
+| `jibuff_next_task` | Claim the next task for the current agent session |
+| `jibuff_finish_task` | Validate and finish a claimed task; requeues on failure |
+| `jibuff_status` | Query current task progress |
 | `jibuff_cancel` | Halt a running loop |
+
+**Interview** — Use `response_format: "json"` for structured interview payloads. The JSON response includes a `jibuff.interview.question` object with three selectable options, `allow_other: true`, and `fallback_text` for plain-text clients. Continue sessions with `session_id` and `revision`, passing `"a"`/`"b"`/`"c"`, custom text, or a structured answer such as `{"value": "a"}`.
+
+**Task loop** — Every `jibuff_finish_task` response includes `next_guide`, which tells the agent whether to claim the next task, fix validator failures, or summarize completion. Pass the same `worker_id` to both `jibuff_next_task` and `jibuff_finish_task` so RuntimeStore tracks worker state consistently.
+
+### CLI
+
+```bash
+# Clarify requirements → generates spec/tasks.md
+jb interview "Add WebRTC screen sharing to the dashboard"
+jb interview "Add WebRTC screen sharing" --mode rtc   # RTC mode
+
+# Print in-session loop guide (for agent-hosted or manual handoff)
+jb run --internal
+
+# Check current loop state
+jb status
+
+# Diagnose and inspect runtime state
+jb doctor
+jb inspect
+jb recover
+jb recover --stale-after-minutes 10
+jb recover --force
+jb cleanup
+
+# Install a thin Codex skill wrapper for in-session discovery
+jb setup-skill
+
+jibuff --help
+```
 
 ---
 
@@ -242,29 +265,37 @@ jibuff uses a three-stage hybrid scorer that balances cost and accuracy:
 
 ## Architecture
 
+jibuff is a runtime layer that runs *inside* the agent session. The agent calls MCP tools; jibuff absorbs ambiguity, manages state, and enforces validation — the agent never leaves its session to spawn a subprocess.
+
 ```
-┌─────────────────────────────────────────────────┐
-│                   CLI / MCP                     │
-│         jibuff run | jibuff interview           │
-└──────────────────┬──────────────────────────────┘
-                   │
-┌──────────────────▼──────────────────────────────┐
-│              Orchestrator                       │
-│    LoopController  ·  TaskQueue  ·  AgentRunner │
-└──────────────────┬──────────────────────────────┘
-                   │
-      ┌────────────┴─────────────┐
-      │                          │
-┌─────▼──────┐          ┌────────▼───────┐
-│  Interview  │          │   Validators   │
-│  Engine     │          │ lint·type·test │
-│  Ambiguity  │          │ security·rtc   │
-│  Risk Index │          └────────┬───────┘
-└─────────────┘                   │
-                         ┌────────▼───────┐
-                         │    Storage     │
-                         │  ArtifactStore │
-                         └────────────────┘
+┌──────────────────────────────────────────────────────┐
+│              Claude Code / Codex (agent session)     │
+│                                                      │
+│  jibuff_interview → jibuff_run                       │
+│      → jibuff_next_task → [implement] →              │
+│        jibuff_finish_task → repeat                   │
+└────────────────────┬─────────────────────────────────┘
+                     │ MCP
+┌────────────────────▼─────────────────────────────────┐
+│                 jibuff MCP server                    │
+│                                                      │
+│  ┌─────────────┐   ┌──────────────────────────────┐  │
+│  │  Interview  │   │        Orchestrator           │  │
+│  │  Engine     │   │  RuntimeStore · TaskQueue     │  │
+│  │  Ambiguity  │   └──────────────┬───────────────┘  │
+│  │  Risk Index │                  │                  │
+│  └─────────────┘       ┌──────────▼──────────┐       │
+│                        │     Validators      │       │
+│                        │ lint·type·test      │       │
+│                        │ security·rtc        │       │
+│                        └──────────┬──────────┘       │
+│                                   │                  │
+│                        ┌──────────▼──────────┐       │
+│                        │  Storage            │       │
+│                        │  .jibuff/runs/      │       │
+│                        │  storage/           │       │
+│                        └─────────────────────┘       │
+└──────────────────────────────────────────────────────┘
 ```
 
 ---

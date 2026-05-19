@@ -1,0 +1,34 @@
+graph LR
+    user-input["User Request\nfree-form text"]
+    interview-state["Interview Session\n.jibuff/mcp/interviews/{id}.md"]
+    tasks-md["spec/tasks.md\ntask checklist"]
+    task-status["task_status.json\nstorage/task_status.json"]
+    failure-md["last_failure.md\nstorage/last_failure.md"]
+    agent-prompt["Agent Prompt\nbuilt per task"]
+    agent-output["Agent Output\nstdout + exit code"]
+    validator-output["Validator Output\ntuple(bool, str)"]
+    quality-result["Quality Result\nQualityResult dataclass"]
+    trace["Task Trace\nstorage/traces/"]
+    open-issues["Open Issues\nstorage/open_issues.json"]
+
+    classDef store fill:#a6e3a1,stroke:#a6e3a1,color:#1e1e2e
+    classDef entry fill:#89b4fa,stroke:#89b4fa,color:#1e1e2e
+
+    class user-input entry
+    class interview-state,tasks-md,task-status,failure-md,trace,open-issues store
+
+    user-input -->|"transcript Q&A rounds"| interview-state
+    interview-state -->|"generate_tasks_md()"| tasks-md
+    tasks-md -->|"parse + overlay status"| task-status
+    task-status -->|"claim token + heartbeat"| task-status
+    failure-md -->|"injected into prompt"| agent-prompt
+    tasks-md -->|"task description"| agent-prompt
+    agent-prompt -->|"subprocess stdin"| agent-output
+    agent-output -->|"run validators"| validator-output
+    validator-output -->|"fail → write"| failure-md
+    validator-output -->|"pass → LLM score"| quality-result
+    quality-result -->|"fail → context()"| agent-prompt
+    validator-output -->|"write trace"| trace
+    quality-result -->|"write trace"| trace
+    task-status -->|"mark done/requeue"| task-status
+    failure-md -->|"escalate → create issue"| open-issues

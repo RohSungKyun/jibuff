@@ -1,0 +1,1 @@
+Two workflow modes govern strictness: `quick` (ambiguity ≤0.25, 4 validators, no quality gate) and `rtc` (ambiguity ≤0.15, risk gate <0.4, 8 validators, quality ≥0.7 ralph cycle). The system supports both a Typer CLI (`jb`/`jibuff`) and an MCP stdio server for Claude Code integration.

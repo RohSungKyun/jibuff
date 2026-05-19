@@ -1,0 +1,1 @@
+interview/engine.py. Runs up to max_interview_rounds of Q&A. Each round: Stage 1 keyword scan (free), then async parallel Stage 2 (contradiction detection) + Stage 3 (dimensional scoring + risk scoring) via OpenRouter. Generates a QuestionBlock with a/b/c choices. Session terminates when ambiguity.passed AND risk.gate_passed, or when max rounds is hit.

@@ -1,0 +1,1 @@
+Parses spec/tasks.md task markers ([ ]=todo, [x]=done, [~]=in_progress, [!]=blocked) and persists live status in storage/task_status.json. Provides optimistic concurrency via claim tokens — mark_done/requeue require the token issued at mark_in_progress. Thread-safe via internal lock. Heartbeat update touches heartbeat_at field without changing status.

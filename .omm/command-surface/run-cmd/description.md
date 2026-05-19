@@ -1,0 +1,1 @@
+`jb run [--mode quick|rtc] [--workspace DIR] [--max-iterations N] [--no-commit] [--agent CMD]`. Reads spec/tasks.md, instantiates LoopController with validator and evaluator stack appropriate to the mode, and drives the run→validate→quality loop until all tasks pass or limits are reached. Auto-commits passing tasks to git unless --no-commit.

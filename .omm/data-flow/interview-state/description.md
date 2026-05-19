@@ -1,0 +1,1 @@
+MCP interview sessions are persisted as markdown files at .jibuff/mcp/interviews/{session_id}.md. Contains embedded JSON (```json jibuff-session block) with session_id, revision (optimistic concurrency), mode, transcript, pending_question, and expires_at (24h TTL). The CLI path uses in-memory sessions only.

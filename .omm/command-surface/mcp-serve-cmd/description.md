@@ -1,0 +1,1 @@
+`jb mcp serve`. Starts the jibuff MCP stdio server (jibuff_mcp/server.py). Normally launched by Claude Code automatically after `jb setup`. Includes a parent-process watcher that exits the server if the parent (Claude Code) dies.

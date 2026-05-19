@@ -1,0 +1,1 @@
+`jb doctor [--workspace DIR]`. Runs prerequisite checks via orchestrator/ops.run_doctor(): verifies ANTHROPIC_API_KEY or OPENROUTER_API_KEY env var, checks that claude or codex is on PATH, confirms spec/tasks.md exists, and checks any mode-specific requirements. Exits with code 1 if any required check fails.

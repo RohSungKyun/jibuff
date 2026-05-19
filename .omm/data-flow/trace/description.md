@@ -1,0 +1,1 @@
+Per-iteration trace files written by reporters/tracer.py to storage/traces/. Each trace records: task_id, success, duration_seconds, validator_errors, quality_score, quality_passed, stopped_reason, and iteration number. Used for post-run analysis; not fed back into the agent loop.

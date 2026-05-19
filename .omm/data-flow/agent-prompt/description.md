@@ -1,0 +1,1 @@
+Built per iteration by AgentRunner._build_prompt(). Contains: task ID, task description, instructions (scope, constitution reference, toolchain requirements), and optionally the previous failure context from last_failure.md. Passed as the final positional argument to the agent CLI subprocess.

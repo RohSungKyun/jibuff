@@ -1,8 +1,10 @@
-"""jibuff MCP server — exposes four tools for use inside Claude Code sessions.
+"""jibuff MCP server — exposes tools for use inside Claude Code sessions.
 
 Tools:
   jibuff_interview  Start or continue an interview session
   jibuff_run        Execute the loop for a given spec/task file
+  jibuff_next_task  Claim the next in-session task
+  jibuff_finish_task Validate and finish an in-session task
   jibuff_status     Query current loop state
   jibuff_cancel     Halt a running loop
 
@@ -83,10 +85,27 @@ TOOLS: list[dict[str, object]] = [
                     "default": "quick",
                 },
                 "answer": {
-                    "type": "string",
+                    "oneOf": [
+                        {"type": "string"},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "value": {"type": "string"},
+                                "text": {"type": "string"},
+                                "custom": {"type": "string"},
+                            },
+                        },
+                    ],
                     "description": (
-                        "Answer to the previous round of questions (omit for first call)"
+                        "Answer to the previous round. Use a/b/c, custom text, "
+                        "or an object such as {'value': 'a'}."
                     ),
+                },
+                "response_format": {
+                    "type": "string",
+                    "enum": ["text", "json"],
+                    "description": "Return legacy text or a structured JSON payload.",
+                    "default": "text",
                 },
                 "action": {
                     "type": "string",
@@ -104,8 +123,9 @@ TOOLS: list[dict[str, object]] = [
     {
         "name": "jibuff_run",
         "description": (
-            "Execute the jibuff loop for a spec. "
-            "Picks up from the next incomplete task in tasks.md."
+            "Initialize an in-session jibuff run. Sets up RuntimeStore and returns "
+            "the task-loop guide so the current AI agent drives execution via "
+            "jibuff_next_task / jibuff_finish_task. Does not spawn an external agent."
         ),
         "inputSchema": {
             "type": "object",
@@ -122,8 +142,97 @@ TOOLS: list[dict[str, object]] = [
                 },
                 "dry_run": {
                     "type": "boolean",
-                    "description": "If true, validate setup only without executing agent",
+                    "description": "If true, validate setup only without starting the run",
                     "default": False,
+                },
+                "response_format": {
+                    "type": "string",
+                    "enum": ["text", "json"],
+                    "description": "Return human-readable text or JSON.",
+                    "default": "text",
+                },
+            },
+        },
+    },
+    {
+        "name": "jibuff_next_task",
+        "description": (
+            "Claim the next task for in-session execution by the current AI agent. "
+            "This does not spawn an external agent CLI."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["quick", "rtc"],
+                    "description": "Workflow mode (default: quick)",
+                    "default": "quick",
+                },
+                "workspace": {
+                    "type": "string",
+                    "description": "Absolute path to the workspace directory (default: cwd)",
+                },
+                "worker_id": {
+                    "type": "string",
+                    "description": "Identifier for the current agent session",
+                    "default": "jibuff-agent",
+                },
+                "response_format": {
+                    "type": "string",
+                    "enum": ["text", "json"],
+                    "description": "Return human-readable text or JSON.",
+                    "default": "text",
+                },
+            },
+        },
+    },
+    {
+        "name": "jibuff_finish_task",
+        "description": (
+            "Validate and finish an in-session task. Marks done on pass, or requeues "
+            "and writes a failure report on validator failure."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["task_id", "claim_token"],
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "Task id previously returned by jibuff_next_task",
+                },
+                "claim_token": {
+                    "type": "string",
+                    "description": "Claim token previously returned by jibuff_next_task",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["quick", "rtc"],
+                    "description": "Workflow mode (default: quick)",
+                    "default": "quick",
+                },
+                "workspace": {
+                    "type": "string",
+                    "description": "Absolute path to the workspace directory (default: cwd)",
+                },
+                "worker_id": {
+                    "type": "string",
+                    "description": (
+                        "Worker identifier used when claiming the task. "
+                        "Must match the worker_id passed to jibuff_next_task."
+                    ),
+                    "default": "jibuff-agent",
+                },
+                "validate": {
+                    "type": "boolean",
+                    "description": "Run the mode validator stack before marking done",
+                    "default": True,
+                },
+                "response_format": {
+                    "type": "string",
+                    "enum": ["text", "json"],
+                    "description": "Return human-readable text or JSON.",
+                    "default": "text",
                 },
             },
         },
@@ -349,6 +458,170 @@ def _state_from_session(
     }
 
 
+def _answer_to_text(answer: object) -> str | None:
+    if answer is None:
+        return None
+    if isinstance(answer, dict):
+        for key in ("text", "custom"):
+            value = answer.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        value = answer.get("value")
+        return str(value) if value is not None else None
+    return str(answer)
+
+
+def _question_payload(question: object, fallback_text: str = "") -> dict[str, object] | None:
+    if hasattr(question, "structured_payload"):
+        payload = question.structured_payload()
+        return payload if isinstance(payload, dict) else None
+
+    if question is None and fallback_text:
+        from interview.engine import QuestionBlock
+
+        return QuestionBlock.from_text(fallback_text).structured_payload()
+
+    return None
+
+
+def _json_response(payload: dict[str, object]) -> str:
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _coerce_response_format(args: dict[str, object]) -> str:
+    response_format = str(args.get("response_format", "text"))
+    if response_format not in {"text", "json"}:
+        raise ValueError("'response_format' must be 'text' or 'json'.")
+    return response_format
+
+
+def _workspace_from_args(args: dict[str, object], cwd: Path) -> Path:
+    return Path(str(args["workspace"])) if "workspace" in args else cwd
+
+
+def _queue_for_workspace(workspace: Path) -> object:
+    from orchestrator.task_queue import TaskQueue
+
+    return TaskQueue(
+        tasks_file=workspace / _DEFAULT_TASKS,
+        status_file=workspace / _DEFAULT_STATUS,
+    )
+
+
+def _runtime_store_for_workspace(workspace: Path, queue: object, mode: str) -> object:
+    from orchestrator.runtime_store import RuntimeRunActiveError, RuntimeStore
+
+    active = RuntimeStore.active(workspace, running_only=True)
+    if active is not None:
+        return active
+
+    try:
+        return RuntimeStore.start(
+            workspace,
+            list(getattr(queue, "_tasks", [])),
+            mode=mode,
+            worker_count=1,
+        )
+    except RuntimeRunActiveError:
+        active = RuntimeStore.active(workspace, running_only=True)
+        if active is not None:
+            return active
+        raise
+
+
+def _find_task(queue: object, task_id: str) -> object | None:
+    return next(
+        (
+            task
+            for task in getattr(queue, "_tasks", [])
+            if getattr(task, "id", "") == task_id
+        ),
+        None,
+    )
+
+
+def _claimable_tasks(queue: object) -> list[object]:
+    return [
+        task
+        for task in getattr(queue, "_tasks", [])
+        if getattr(task, "status", "") == "todo"
+    ]
+
+
+def _task_to_payload(task: object) -> dict[str, object]:
+    return {
+        "id": getattr(task, "id", ""),
+        "description": getattr(task, "description", ""),
+        "status": getattr(task, "status", ""),
+        "revision": getattr(task, "revision", 0),
+        "claimed_by": getattr(task, "claimed_by", None),
+        "claimed_at": getattr(task, "claimed_at", None),
+        "claim_token": getattr(task, "claim_token", None),
+    }
+
+
+def _internal_next_guide(status: str) -> str:
+    guides = {
+        "claimed": (
+            "Implement only the claimed task in the current AI agent session. "
+            "When edits are complete, call jibuff_finish_task with task_id and claim_token."
+        ),
+        "passed_more": (
+            "Task passed validation and is marked done. Call jibuff_next_task to claim the "
+            "next task."
+        ),
+        "passed_done": (
+            "All tasks are complete. Run any final project-level verification you need, "
+            "then summarize the completed work and artifacts."
+        ),
+        "failed": (
+            "Validation failed and the task was requeued. Use the failure report, fix the "
+            "issues in the current session, then call jibuff_next_task to reclaim the task."
+        ),
+        "empty": (
+            "No runnable todo task is available. Check jibuff_status for in-progress or "
+            "blocked tasks before starting new work."
+        ),
+    }
+    return guides[status]
+
+
+def _build_validator_stack(mode: str) -> list[object]:
+    from validators.lint import LintValidator
+    from validators.security import SecurityValidator
+    from validators.tests import PytestValidator
+    from validators.types import TypeValidator
+
+    validators: list[object] = [
+        LintValidator(),
+        TypeValidator(),
+        PytestValidator(),
+        SecurityValidator(),
+    ]
+    if mode == "rtc":
+        from validators.device import DeviceValidator
+        from validators.fallback import FallbackValidator
+        from validators.firewall import FirewallValidator
+        from validators.network import NetworkValidator
+
+        validators += [
+            DeviceValidator(),
+            NetworkValidator(),
+            FallbackValidator(),
+            FirewallValidator(),
+        ]
+    return validators
+
+
+def _run_validator_stack(workspace: Path, mode: str) -> dict[str, str]:
+    errors: dict[str, str] = {}
+    for validator in _build_validator_stack(mode):
+        ok, output = validator.run(workspace)
+        if not ok:
+            errors[str(validator.name)] = output
+    return errors
+
+
 def _session_from_state(state: dict[str, object]) -> object:
     from interview.engine import InterviewSession, QuestionBlock
 
@@ -390,6 +663,7 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
     session_id = str(args.get("session_id", ""))
     mode = str(args.get("mode", "quick"))
     answer = args.get("answer")
+    response_format = str(args.get("response_format", "text"))
     action = str(args.get("action", "continue"))
     expected_revision = args.get("revision")
 
@@ -405,6 +679,9 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
             state_path = _session_path(workspace, session_id)
             state_path.unlink(missing_ok=True)
         return f"[jibuff interview] cancelled session_id: {session_id}"
+
+    if response_format not in {"text", "json"}:
+        return "Error: 'response_format' must be 'text' or 'json'."
 
     try:
         cfg = get_mode(mode)
@@ -466,7 +743,7 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
                 session = engine.start(request)
                 state_path = _session_path(workspace, session_id)
 
-            user_answer = str(answer) if answer is not None else None
+            user_answer = _answer_to_text(answer)
             questions = await engine.step(session, user_answer=user_answer)
             next_revision = revision + 1
 
@@ -475,11 +752,35 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
                 amb = session.last_ambiguity
                 amb_str = f"{amb.final_score:.2f}" if amb else "n/a"
                 state_path.unlink(missing_ok=True)
+
+                spec_dir = workspace / "spec"
+                spec_dir.mkdir(parents=True, exist_ok=True)
+                tasks_file = spec_dir / "tasks.md"
+                _atomic_write_text(tasks_file, tasks_md + "\n")
+
+                next_guide = (
+                    "spec/tasks.md written. "
+                    "Call jibuff_run with response_format=\"json\" to start the task loop."
+                )
+                if response_format == "json":
+                    return _json_response({
+                        "kind": "jibuff.interview.complete",
+                        "session_id": session_id,
+                        "revision": next_revision,
+                        "mode": mode,
+                        "status": "complete",
+                        "ambiguity_score": amb_str,
+                        "tasks_md": tasks_md,
+                        "tasks_file": str(tasks_file),
+                        "next_guide": next_guide,
+                    })
                 return (
                     f"[jibuff interview] mode={mode} | threshold={cfg.ambiguity_threshold}\n"
                     f"session_id: {session_id}\n"
-                    f"Interview complete. Ambiguity score: {amb_str}\n\n"
-                    f"Generated tasks:\n{tasks_md}"
+                    f"Interview complete. Ambiguity score: {amb_str}\n"
+                    f"tasks_file: {tasks_file}\n\n"
+                    f"Generated tasks:\n{tasks_md}\n\n"
+                    f"Next: {next_guide}"
                 )
 
             # Unit tests often patch InterviewEngine with MagicMock sessions; only
@@ -494,6 +795,25 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
                     created_at=created_at,
                 )
                 _atomic_write_text(state_path, _render_session_md(state))
+
+            if response_format == "json":
+                fallback_text = questions[0] if questions else ""
+                question = _question_payload(
+                    getattr(session, "pending_question", None),
+                    fallback_text=fallback_text,
+                )
+                return _json_response({
+                    "kind": "jibuff.interview.pending",
+                    "session_id": session_id,
+                    "revision": next_revision,
+                    "mode": mode,
+                    "status": "active",
+                    "round": int(getattr(session, "rounds", 0)),
+                    "threshold": cfg.ambiguity_threshold,
+                    "state_file": str(state_path),
+                    "question": question,
+                    "fallback_text": fallback_text,
+                })
 
             lines = [
                 f"[jibuff interview] mode={mode} | threshold={cfg.ambiguity_threshold}",
@@ -512,10 +832,11 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
 
 
 def handle_run(args: dict[str, object], cwd: Path) -> str:
-    """Execute the LoopController for the given workspace."""
+    """Initialize an in-session run and return the task-loop guide."""
     mode = str(args.get("mode", "quick"))
     workspace = Path(str(args["workspace"])) if "workspace" in args else cwd
     dry_run = bool(args.get("dry_run", False))
+    response_format = str(args.get("response_format", "text"))
 
     try:
         cfg = get_mode(mode)
@@ -527,6 +848,15 @@ def handle_run(args: dict[str, object], cwd: Path) -> str:
         return f"Error: tasks file not found at {tasks_file}"
 
     if dry_run:
+        if response_format == "json":
+            return _json_response({
+                "kind": "jibuff.run.dry_run",
+                "mode": mode,
+                "workspace": str(workspace),
+                "tasks_file": str(tasks_file),
+                "ambiguity_threshold": cfg.ambiguity_threshold,
+                "status": "ok",
+            })
         return (
             f"[jibuff run] dry_run=true | mode={mode}\n"
             f"workspace: {workspace}\n"
@@ -536,49 +866,247 @@ def handle_run(args: dict[str, object], cwd: Path) -> str:
         )
 
     try:
-        from orchestrator.agent_runner import AgentRunner
-        from orchestrator.loop_controller import LoopController
-        from orchestrator.task_queue import TaskQueue
-        from validators.lint import LintValidator
-        from validators.security import SecurityValidator
-        from validators.tests import PytestValidator
-        from validators.types import TypeValidator
+        from orchestrator.ops import INTERNAL_RUN_GUIDE
 
-        storage_dir = workspace / "storage"
-        storage_dir.mkdir(parents=True, exist_ok=True)
-        status_file = storage_dir / "task_status.json"
+        queue = _queue_for_workspace(workspace)
+        summary = queue.summary()
 
-        queue = TaskQueue(tasks_file=tasks_file, status_file=status_file)
-        runner = AgentRunner(workspace=workspace)
-        validators = [LintValidator(), TypeValidator(), PytestValidator(), SecurityValidator()]
+        if queue.all_done():
+            if response_format == "json":
+                return _json_response({
+                    "kind": "jibuff.run.noop",
+                    "mode": mode,
+                    "workspace": str(workspace),
+                    "run_id": None,
+                    "summary": summary,
+                    "status": "all_done",
+                    "next_guide": "All tasks are already complete.",
+                })
+            return f"[jibuff run] All tasks already complete.\n{queue.summary()}"
 
-        if mode == "rtc":
-            from validators.device import DeviceValidator
-            from validators.fallback import FallbackValidator
-            from validators.firewall import FirewallValidator
-            from validators.network import NetworkValidator
-            validators += [
-                DeviceValidator(), NetworkValidator(), FallbackValidator(), FirewallValidator()
-            ]
+        runtime_store = _runtime_store_for_workspace(workspace, queue, mode)
 
-        controller = LoopController(
-            queue=queue,
-            runner=runner,
-            validators=validators,  # type: ignore[arg-type]
-            storage_dir=storage_dir,
-            workspace=workspace,
-        )
-        result = controller.run()
+        if response_format == "json":
+            return _json_response({
+                "kind": "jibuff.run.started",
+                "mode": mode,
+                "workspace": str(workspace),
+                "run_id": runtime_store.run_id,
+                "summary": summary,
+                "status": "started",
+                "next_guide": (
+                    "Call jibuff_next_task with response_format=\"json\" to claim "
+                    "your first task, then implement it and call jibuff_finish_task."
+                ),
+            })
 
         return (
-            f"[jibuff run] mode={mode} | {result.stopped_reason}\n"
-            f"completed : {len(result.completed_tasks)}\n"
-            f"failed    : {len(result.failed_tasks)}\n"
-            f"iterations: {result.total_iterations}"
+            f"[jibuff run] mode={mode} | run_id={runtime_store.run_id}\n"
+            f"todo={summary['todo']} done={summary['done']} "
+            f"blocked={summary.get('blocked', 0)}\n\n"
+            + INTERNAL_RUN_GUIDE
         )
 
     except Exception as e:
         return f"Error running loop: {e}"
+
+
+def handle_next_task(args: dict[str, object], cwd: Path) -> str:
+    """Claim the next task for execution inside the current agent session."""
+    mode = str(args.get("mode", "quick"))
+    worker_id = str(args.get("worker_id", "jibuff-agent"))
+    workspace = _workspace_from_args(args, cwd)
+
+    try:
+        response_format = _coerce_response_format(args)
+        get_mode(mode)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    tasks_file = workspace / _DEFAULT_TASKS
+    if not tasks_file.exists():
+        return f"Error: tasks file not found at {tasks_file}"
+
+    try:
+        from orchestrator.runtime_store import RuntimeClaimError
+        from reporters.progress import write_progress
+
+        queue = _queue_for_workspace(workspace)
+        storage_dir = workspace / "storage"
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        claimable = _claimable_tasks(queue)
+        task = None
+        claim_token = ""
+
+        runtime_store = _runtime_store_for_workspace(workspace, queue, mode) if claimable else None
+
+        for candidate in claimable:
+            try:
+                if runtime_store is None:  # pragma: no cover - defensive guard
+                    break
+                claim_token = runtime_store.claim_task(
+                    candidate,
+                    worker_id=worker_id,
+                    claim_token=f"{getattr(candidate, 'id', '')}:{uuid.uuid4().hex}",
+                    expected_revision=int(getattr(candidate, "revision", 0)),
+                )
+            except RuntimeClaimError:
+                continue
+            queue.mark_in_progress(
+                getattr(candidate, "id", ""),
+                claimed_by=worker_id,
+                claim_token=claim_token,
+            )
+            task = _find_task(queue, getattr(candidate, "id", "")) or candidate
+            break
+
+        if task is None:
+            payload = {
+                "kind": "jibuff.in_session.empty",
+                "mode": mode,
+                "status": "empty",
+                "summary": queue.summary(),
+                "next_guide": _internal_next_guide("passed_done" if queue.all_done() else "empty"),
+            }
+            if response_format == "json":
+                return _json_response(payload)
+            return (
+                "[jibuff next-task] no runnable task\n"
+                f"summary: {queue.summary()}\n"
+                f"next: {payload['next_guide']}"
+            )
+
+        write_progress(queue, storage_dir)
+        payload = {
+            "kind": "jibuff.in_session.task",
+            "mode": mode,
+            "status": "claimed",
+            "task": _task_to_payload(task),
+            "claim_token": claim_token,
+            "next_guide": _internal_next_guide("claimed"),
+            "instructions": [
+                "Complete only this task in the current AI agent session.",
+                "jibuff_run initializes the run; do not call it again mid-loop.",
+                "After edits, call jibuff_finish_task with task_id and claim_token.",
+            ],
+        }
+        if response_format == "json":
+            return _json_response(payload)
+        return (
+            f"[jibuff next-task] claimed {task.id}\n"
+            f"task: {task.description}\n"
+            f"claim_token: {claim_token}\n"
+            f"next: {payload['next_guide']}"
+        )
+    except Exception as e:
+        return f"Error claiming next task: {e}"
+
+
+def handle_finish_task(args: dict[str, object], cwd: Path) -> str:
+    """Validate and finish an in-session task."""
+    mode = str(args.get("mode", "quick"))
+    workspace = _workspace_from_args(args, cwd)
+    task_id = str(args.get("task_id", ""))
+    claim_token = str(args.get("claim_token", ""))
+    should_validate = bool(args.get("validate", True))
+    worker_id_arg = args.get("worker_id")
+
+    try:
+        response_format = _coerce_response_format(args)
+        get_mode(mode)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    if not task_id or not claim_token:
+        return "Error: 'task_id' and 'claim_token' are required."
+
+    tasks_file = workspace / _DEFAULT_TASKS
+    if not tasks_file.exists():
+        return f"Error: tasks file not found at {tasks_file}"
+
+    try:
+        from orchestrator.runtime_store import RuntimeClaimError, RuntimeStore
+        from orchestrator.task_queue import TaskClaimError
+        from reporters.failure_report import write_failure_report
+        from reporters.progress import write_progress
+
+        queue = _queue_for_workspace(workspace)
+        task = _find_task(queue, task_id)
+        if task is None:
+            return f"Error: task not found: {task_id}"
+
+        storage_dir = workspace / "storage"
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        runtime_store = RuntimeStore.active(workspace, running_only=True)
+        if runtime_store is None:
+            return f"Error: no active runtime run for task {task_id}. Call jibuff_run first."
+        worker_id = (
+            str(worker_id_arg)
+            if worker_id_arg is not None
+            else str(getattr(task, "claimed_by", "") or "jibuff-agent")
+        )
+        if not runtime_store.heartbeat(task_id, claim_token, worker_id=worker_id):
+            return f"Error: stale runtime claim token for task {task_id}"
+
+        errors = _run_validator_stack(workspace, mode) if should_validate else {}
+
+        if errors:
+            failure_context = write_failure_report(
+                task=task,
+                validator_errors=errors,
+                storage_dir=storage_dir,
+            )
+            runtime_store.requeue_task(task_id, claim_token, worker_id=worker_id)
+            queue.requeue(task_id, claim_token=claim_token)
+            write_progress(queue, storage_dir)
+            task = _find_task(queue, task_id) or task
+            payload = {
+                "kind": "jibuff.in_session.finish",
+                "mode": mode,
+                "status": "failed",
+                "task": _task_to_payload(task),
+                "validator_errors": errors,
+                "failure_context": failure_context,
+                "next_guide": _internal_next_guide("failed"),
+            }
+            if response_format == "json":
+                return _json_response(payload)
+            return (
+                f"[jibuff finish-task] validation failed for {task_id}\n"
+                f"failures: {', '.join(errors)}\n"
+                f"next: {payload['next_guide']}"
+            )
+
+        runtime_store.complete_task(task_id, claim_token, worker_id=worker_id)
+        queue.mark_done(task_id, claim_token=claim_token)
+        write_progress(queue, storage_dir)
+        task = _find_task(queue, task_id) or task
+        all_done = queue.all_done()
+        if all_done:
+            runtime_store.finish("all_done")
+        guide_key = "passed_done" if all_done else "passed_more"
+        payload = {
+            "kind": "jibuff.in_session.finish",
+            "mode": mode,
+            "status": "passed",
+            "task": _task_to_payload(task),
+            "summary": queue.summary(),
+            "all_done": all_done,
+            "next_guide": _internal_next_guide(guide_key),
+        }
+        if response_format == "json":
+            return _json_response(payload)
+        return (
+            f"[jibuff finish-task] task passed: {task_id}\n"
+            f"summary: {queue.summary()}\n"
+            f"next: {payload['next_guide']}"
+        )
+    except RuntimeClaimError as e:
+        return f"Error: {e}"
+    except TaskClaimError as e:
+        return f"Error: {e}"
+    except Exception as e:
+        return f"Error finishing task: {e}"
 
 
 def handle_status(args: dict[str, object], cwd: Path) -> str:
@@ -659,6 +1187,10 @@ def create_server() -> object:
             text = await handle_interview(arguments, cwd)
         elif name == "jibuff_run":
             text = await asyncio.to_thread(handle_run, arguments, cwd)
+        elif name == "jibuff_next_task":
+            text = await asyncio.to_thread(handle_next_task, arguments, cwd)
+        elif name == "jibuff_finish_task":
+            text = await asyncio.to_thread(handle_finish_task, arguments, cwd)
         elif name == "jibuff_status":
             text = await asyncio.to_thread(handle_status, arguments, cwd)
         elif name == "jibuff_cancel":

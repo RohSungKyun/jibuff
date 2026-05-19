@@ -30,18 +30,66 @@ validation-driven execution before handing work to an agent.
 
 - `jb interview "<request>"`: clarify requirements and write `spec/tasks.md`.
 - `jb interview "<request>" --mode rtc`: use stricter RTC/WebRTC clarification.
-- `jb run`: execute the locked tasks through the configured agent CLI.
+- `jb run`: initialize the in-session task loop (returns guidance for next_task/finish_task).
+- `jb run --internal`: same as above, CLI-facing handoff guidance.
 - `jb status`: show current task counts.
 - `jb inspect`: inspect task state, failure artifacts, and MCP interview sessions.
 - `jb doctor`: verify local jibuff readiness.
+
+## In-session agent loop
+
+jibuff runs inside the current AI agent session — no external subprocess is
+spawned. This mirrors an OMX-style workflow while keeping state under
+`.jibuff/runs/<run_id>/` and `storage/`.
+
+1. Use `jibuff_interview` with `response_format="json"` until it returns
+   generated tasks.
+2. Write or review `spec/tasks.md`.
+3. Call `jibuff_run` to initialize the run and receive the task-loop guide.
+4. Call `jibuff_next_task` to claim the next task for the current session.
+5. Implement only the claimed task directly in the current agent session.
+6. Call `jibuff_finish_task` with the returned `task_id` and `claim_token`.
+7. Follow the returned `next_guide`: claim the next task, fix a requeued task,
+   or summarize completion when all tasks are done.
+
+## MCP structured interviews
+
+When MCP tools are available, prefer `jibuff_interview` with
+`response_format="json"` for in-session interviews. JSON responses include a
+transport-neutral `jibuff.interview.question` payload with three selectable
+options, `allow_other=true`, and `fallback_text` for clients that cannot render
+a structured question UI. Continue sessions with `session_id`, `revision`, and
+either a legacy string answer (`"a"`, `"b"`, custom text) or a structured answer
+such as `{"value": "a"}`.
 
 ## Workflow
 
 1. Run `jb interview` when the request is ambiguous.
 2. Review `spec/tasks.md` before execution if scope is sensitive.
-3. Run `jb run` after the spec is acceptable.
-4. Use `jb inspect` or `jb recover` if the session is interrupted.
+3. Call `jibuff_run` (MCP) or `jb run` (CLI) to start the in-session loop.
+4. Drive the loop with `jibuff_next_task` and `jibuff_finish_task`.
+5. Use `jb inspect` or `jb recover` if the session is interrupted.
 """
+
+
+INTERNAL_RUN_GUIDE = """\
+[jibuff internal run]
+Use the in-session task loop from the current AI agent:
+
+1. Call jibuff_next_task with response_format="json".
+2. Implement only the returned task in this same session.
+3. Call jibuff_finish_task with task_id and claim_token.
+4. Follow next_guide:
+   - passed + all_done=false: call jibuff_next_task again.
+   - failed: use storage/last_failure.md, fix, then reclaim the task.
+   - passed + all_done=true: summarize completion and verification.
+
+Do not spawn an external agent CLI for this internal run.
+"""
+
+
+def internal_run_guide() -> str:
+    return INTERNAL_RUN_GUIDE
 
 
 @dataclass

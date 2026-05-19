@@ -1,0 +1,1 @@
+The initial free-form text the user provides to `jb interview` or the jibuff_interview MCP tool. This is the only point where unconstrained text enters the system. Everything downstream is structured.

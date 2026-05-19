@@ -237,6 +237,42 @@ def test_question_block_parses_choices_and_custom_input() -> None:
     assert block.resolve_answer("d") is None
 
 
+def test_question_block_structured_payload() -> None:
+    block = QuestionBlock.from_text(
+        "Which user group is primary?\n"
+        "a) Admin users\n"
+        "b) Guest users\n"
+        "c) Internal operators\n"
+        "직접 입력: type a custom answer if none fit"
+    )
+
+    payload = block.structured_payload()
+
+    assert payload["kind"] == "jibuff.interview.question"
+    assert payload["question"] == "Which user group is primary?"
+    assert payload["type"] == "single-answerable"
+    assert payload["allow_other"] is True
+    assert payload["other_label"] == "직접 입력"
+    assert payload["fallback_text"] == block.render()
+    assert payload["options"] == [
+        {
+            "label": "Admin users",
+            "value": "a",
+            "description": "Admin users",
+        },
+        {
+            "label": "Guest users",
+            "value": "b",
+            "description": "Guest users",
+        },
+        {
+            "label": "Internal operators",
+            "value": "c",
+            "description": "Internal operators",
+        },
+    ]
+
+
 def test_engine_validates_and_normalizes_letter_answer_to_option_text() -> None:
     engine = _make_engine("quick")
     session = engine.start("build me a thing")

@@ -1,0 +1,1 @@
+interview/ambiguity.py. Two-part ambiguity assessment: check_keyword_coverage() scans the request text for presence of dimension keywords (goal, constraint, risk, environment, success) without any LLM call. DimensionalScore holds per-dimension floats and AmbiguityResult aggregates stage1+2+3 into a final_score compared against the mode threshold.

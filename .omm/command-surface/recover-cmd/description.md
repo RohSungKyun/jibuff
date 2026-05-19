@@ -1,0 +1,1 @@
+`jb recover [--workspace DIR] [--stale-after-minutes N] [--force]`. Requeues in-progress tasks whose heartbeat is older than the threshold (default 10 min), allowing the loop to resume after a crash or interruption. --force requeues all in-progress tasks regardless of heartbeat freshness.

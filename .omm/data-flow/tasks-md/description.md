@@ -1,0 +1,1 @@
+spec/tasks.md is the primary handoff artifact between interview and execution. A markdown checklist where each task line encodes phase, sequential ID, and description. TaskQueue parses it with a regex and overlays live status from task_status.json. Users can write this file directly without running an interview.

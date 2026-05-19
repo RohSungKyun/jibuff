@@ -1,0 +1,1 @@
+The interview phase is optional — users can handwrite spec/tasks.md and jump straight to `jb run`. The MCP path (jibuff_interview tool) persists session state as workspace markdown files between Claude Code turns, supporting multi-turn interviews across separate tool calls.

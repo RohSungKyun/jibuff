@@ -1,0 +1,9 @@
+created: 2026-05-18T03:08:12.833Z
+updated: 2026-05-18T03:08:12.833Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: lint
+children: []
+parentPath:
+  - validators

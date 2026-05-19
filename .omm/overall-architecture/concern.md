@@ -1,0 +1,1 @@
+Phase 7 (Phaser mode — game-focused validators) is planned but not yet implemented. The quality evaluator caps agent output at 4000 chars, which may miss failures in larger agent responses. Interview engine uses OpenRouter's `openrouter/auto` routing, so model quality is non-deterministic.

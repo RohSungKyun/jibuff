@@ -1,0 +1,13 @@
+created: 2026-05-18T03:05:23.122Z
+updated: 2026-05-18T03:05:51.492Z
+update_count: 5
+last_field: concern
+git_commit: ba9694c
+git_branch: chore/scan-architecture
+children:
+  - cli-mcp
+  - evaluators
+  - interview
+  - orchestrator
+  - storage
+  - validators

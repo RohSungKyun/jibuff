@@ -1,0 +1,1 @@
+storage/task_status.json holds the mutable execution state for all tasks: status (todo/in_progress/done/blocked), revision counter, claimed_by, claim_token, and heartbeat_at. Written by TaskQueue._flush_status_file() on every state transition. Overlaid on top of tasks.md at TaskQueue init.

@@ -866,7 +866,7 @@ def handle_run(args: dict[str, object], cwd: Path) -> str:
         if queue.all_done():
             if response_format == "json":
                 return _json_response({
-                    "kind": "jibuff.run.started",
+                    "kind": "jibuff.run.noop",
                     "mode": mode,
                     "workspace": str(workspace),
                     "run_id": None,
@@ -980,7 +980,7 @@ def handle_next_task(args: dict[str, object], cwd: Path) -> str:
             "next_guide": _internal_next_guide("claimed"),
             "instructions": [
                 "Complete only this task in the current AI agent session.",
-                "Do not call jibuff_run for this task; that path spawns an external agent.",
+                "jibuff_run initializes the run; do not call it again mid-loop.",
                 "After edits, call jibuff_finish_task with task_id and claim_token.",
             ],
         }

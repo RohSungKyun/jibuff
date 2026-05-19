@@ -403,7 +403,7 @@ def test_run_initializes_runtime_store(tmp_path: Path) -> None:
     tasks.write_text("- [ ] P0-01: test task\n", encoding="utf-8")
     result = handle_run({"workspace": str(tmp_path), "response_format": "json"}, cwd=tmp_path)
     payload = json.loads(result)
-    assert payload["kind"] == "jibuff.run.started"
+    assert payload["kind"] == "jibuff.run.started"  # active run, not noop
     assert payload["status"] == "started"
     assert payload["run_id"] is not None
     assert "jibuff_next_task" in payload["next_guide"]

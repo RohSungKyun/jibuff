@@ -215,6 +215,14 @@ TOOLS: list[dict[str, object]] = [
                     "type": "string",
                     "description": "Absolute path to the workspace directory (default: cwd)",
                 },
+                "worker_id": {
+                    "type": "string",
+                    "description": (
+                        "Worker identifier used when claiming the task. "
+                        "Must match the worker_id passed to jibuff_next_task."
+                    ),
+                    "default": "jibuff-agent",
+                },
                 "validate": {
                     "type": "boolean",
                     "description": "Run the mode validator stack before marking done",
@@ -1003,6 +1011,7 @@ def handle_finish_task(args: dict[str, object], cwd: Path) -> str:
     task_id = str(args.get("task_id", ""))
     claim_token = str(args.get("claim_token", ""))
     should_validate = bool(args.get("validate", True))
+    worker_id_arg = args.get("worker_id")
 
     try:
         response_format = _coerce_response_format(args)
@@ -1030,7 +1039,11 @@ def handle_finish_task(args: dict[str, object], cwd: Path) -> str:
 
         storage_dir = workspace / "storage"
         runtime_store = _runtime_store_for_workspace(workspace, queue, mode)
-        worker_id = str(getattr(task, "claimed_by", "") or "jibuff-agent")
+        worker_id = (
+            str(worker_id_arg)
+            if worker_id_arg is not None
+            else str(getattr(task, "claimed_by", "") or "jibuff-agent")
+        )
         if not runtime_store.heartbeat(task_id, claim_token, worker_id=worker_id):
             return f"Error: stale runtime claim token for task {task_id}"
 

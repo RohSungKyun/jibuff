@@ -582,6 +582,34 @@ def test_finish_task_rejects_stale_claim_before_validators(tmp_path: Path) -> No
     assert status["tasks"][0]["status"] == "in_progress"
 
 
+def test_finish_task_worker_id_param_takes_priority(tmp_path: Path) -> None:
+    tasks = tmp_path / "spec" / "tasks.md"
+    tasks.parent.mkdir(parents=True)
+    tasks.write_text("- [ ] P0-01: test task\n", encoding="utf-8")
+    claimed = json.loads(handle_next_task({
+        "workspace": str(tmp_path),
+        "worker_id": "codex-session-A",
+        "response_format": "json",
+    }, cwd=tmp_path))
+
+    result = json.loads(handle_finish_task({
+        "workspace": str(tmp_path),
+        "task_id": "P0-01",
+        "claim_token": claimed["claim_token"],
+        "worker_id": "codex-session-A",
+        "validate": False,
+        "response_format": "json",
+    }, cwd=tmp_path))
+
+    assert result["status"] == "passed"
+    runtime = RuntimeStore.latest(tmp_path)
+    assert runtime is not None
+    worker = json.loads(
+        (runtime.worker_path("codex-session-A")).read_text(encoding="utf-8")
+    )
+    assert worker["status"] == "idle"
+
+
 # ---------------------------------------------------------------------------
 # handle_status
 # ---------------------------------------------------------------------------

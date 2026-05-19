@@ -15,9 +15,34 @@ Spec-driven workflow harness for AI coding agents. "Jitter buffer" for requireme
 
 ```bash
 jb interview "request"    # interactive Q&A → generates spec/tasks.md
-jb run [--mode rtc]       # agent loop against spec/tasks.md
+jb run [--mode rtc]       # subprocess path: spawns external agent CLI per task
+jb run --internal         # in-session path: prints MCP tool loop guide
 jb status                 # show task progress
 jb mcp serve              # start MCP stdio server
+```
+
+## In-session agent loop (MCP)
+
+When jibuff is available as an MCP server, drive tasks from within the current
+agent session — no external subprocess is spawned. State lives under
+`.jibuff/runs/<run_id>/` and `storage/`.
+
+```
+1. jibuff_interview  request="..."  response_format="json"
+   → repeat until status="complete"; spec/tasks.md is written automatically
+
+2. jibuff_run  response_format="json"
+   → returns run_id and next_guide; initializes RuntimeStore
+
+3. jibuff_next_task  worker_id="<session-id>"  response_format="json"
+   → returns task, claim_token
+
+4. Implement only the claimed task in this session.
+
+5. jibuff_finish_task  task_id="..."  claim_token="..."  worker_id="<session-id>"
+   → validates, marks done or requeues; follow next_guide
+
+6. Repeat from step 3 until next_guide indicates all_done.
 ```
 
 ## Code conventions
@@ -28,7 +53,6 @@ jb mcp serve              # start MCP stdio server
 - CLI entry point: `orchestrator/main.py` (omitted from coverage)
 - mypy overrides: `mcp.server`, `orchestrator.main` (ignore_errors=true)
 - All validators follow `ValidatorProtocol.run(workspace) -> tuple[bool, str]`
-- Agent: `Codex --dangerously-skip-permissions -p` subprocess per task
 
 ## CI/CD
 
@@ -49,5 +73,5 @@ git tag v0.x.0 && git push origin v0.x.0
 
 ## What's NOT wired yet
 
-- `jb interview` / `jb run` work but depend on Anthropic API key + Codex CLI
+- `jb interview` / `jb run` work but depend on Anthropic API key or Codex CLI
 - Phase 7 (Phaser mode — game-focused validators) is planned/deferred

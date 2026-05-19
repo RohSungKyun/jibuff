@@ -928,8 +928,8 @@ def handle_next_task(args: dict[str, object], cwd: Path) -> str:
         return f"Error: tasks file not found at {tasks_file}"
 
     try:
-        from reporters.progress import write_progress
         from orchestrator.runtime_store import RuntimeClaimError
+        from reporters.progress import write_progress
 
         queue = _queue_for_workspace(workspace)
         storage_dir = workspace / "storage"
@@ -937,10 +937,7 @@ def handle_next_task(args: dict[str, object], cwd: Path) -> str:
         task = None
         claim_token = ""
 
-        if claimable:
-            runtime_store = _runtime_store_for_workspace(workspace, queue, mode)
-        else:
-            runtime_store = None
+        runtime_store = _runtime_store_for_workspace(workspace, queue, mode) if claimable else None
 
         for candidate in claimable:
             try:
@@ -1027,8 +1024,8 @@ def handle_finish_task(args: dict[str, object], cwd: Path) -> str:
         return f"Error: tasks file not found at {tasks_file}"
 
     try:
-        from orchestrator.task_queue import TaskClaimError
         from orchestrator.runtime_store import RuntimeClaimError
+        from orchestrator.task_queue import TaskClaimError
         from reporters.failure_report import write_failure_report
         from reporters.progress import write_progress
 

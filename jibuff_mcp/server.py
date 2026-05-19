@@ -467,7 +467,7 @@ def _answer_to_text(answer: object) -> str | None:
             if isinstance(value, str) and value.strip():
                 return value
         value = answer.get("value")
-        return str(value) if value is not None else ""
+        return str(value) if value is not None else None
     return str(answer)
 
 
@@ -933,6 +933,7 @@ def handle_next_task(args: dict[str, object], cwd: Path) -> str:
 
         queue = _queue_for_workspace(workspace)
         storage_dir = workspace / "storage"
+        storage_dir.mkdir(parents=True, exist_ok=True)
         claimable = _claimable_tasks(queue)
         task = None
         claim_token = ""
@@ -1024,7 +1025,7 @@ def handle_finish_task(args: dict[str, object], cwd: Path) -> str:
         return f"Error: tasks file not found at {tasks_file}"
 
     try:
-        from orchestrator.runtime_store import RuntimeClaimError
+        from orchestrator.runtime_store import RuntimeClaimError, RuntimeStore
         from orchestrator.task_queue import TaskClaimError
         from reporters.failure_report import write_failure_report
         from reporters.progress import write_progress
@@ -1035,7 +1036,10 @@ def handle_finish_task(args: dict[str, object], cwd: Path) -> str:
             return f"Error: task not found: {task_id}"
 
         storage_dir = workspace / "storage"
-        runtime_store = _runtime_store_for_workspace(workspace, queue, mode)
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        runtime_store = RuntimeStore.active(workspace, running_only=True)
+        if runtime_store is None:
+            return f"Error: no active runtime run for task {task_id}. Call jibuff_run first."
         worker_id = (
             str(worker_id_arg)
             if worker_id_arg is not None

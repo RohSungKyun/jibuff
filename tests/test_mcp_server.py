@@ -610,6 +610,27 @@ def test_finish_task_worker_id_param_takes_priority(tmp_path: Path) -> None:
     assert worker["status"] == "idle"
 
 
+def test_finish_task_errors_without_active_runtime_store(tmp_path: Path) -> None:
+    tasks = tmp_path / "spec" / "tasks.md"
+    tasks.parent.mkdir(parents=True)
+    tasks.write_text("- [~] P0-01: in progress task\n", encoding="utf-8")
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    (storage / "task_status.json").write_text(
+        json.dumps({"version": "0.1.0", "tasks": [
+            {"id": "P0-01", "status": "in_progress", "claim_token": "tok", "claimed_by": "x"}
+        ]}),
+        encoding="utf-8",
+    )
+    result = handle_finish_task({
+        "workspace": str(tmp_path),
+        "task_id": "P0-01",
+        "claim_token": "tok",
+        "response_format": "json",
+    }, cwd=tmp_path)
+    assert "no active runtime run" in result
+
+
 # ---------------------------------------------------------------------------
 # handle_status
 # ---------------------------------------------------------------------------

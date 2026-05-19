@@ -137,7 +137,7 @@ Or with `uvx`:
 }
 ```
 
-This exposes four tools to Claude Code:
+This exposes six tools to Claude Code:
 
 | Tool | Description |
 |---|---|

@@ -20,6 +20,7 @@ from jibuff_mcp.server import (
     handle_run,
     handle_status,
 )
+from orchestrator.runtime_store import RuntimeStore
 
 # ---------------------------------------------------------------------------
 # Tool registry
@@ -376,6 +377,33 @@ def test_next_task_claims_task_for_in_session_agent(tmp_path: Path) -> None:
     assert payload["task"]["claimed_by"] == "codex-session"
     assert payload["claim_token"]
     assert "jibuff_finish_task" in payload["next_guide"]
+    runtime = RuntimeStore.active(tmp_path)
+    assert runtime is not None
+    task_state = json.loads(runtime.task_path("P0-01").read_text(encoding="utf-8"))
+    assert task_state["status"] == "in_progress"
+    assert task_state["claim_token"] == payload["claim_token"]
+
+
+def test_next_task_does_not_duplicate_claim_active_task(tmp_path: Path) -> None:
+    tasks = tmp_path / "spec" / "tasks.md"
+    tasks.parent.mkdir(parents=True)
+    tasks.write_text("- [ ] P0-01: test task\n", encoding="utf-8")
+
+    first = json.loads(handle_next_task({
+        "workspace": str(tmp_path),
+        "worker_id": "codex-session-1",
+        "response_format": "json",
+    }, cwd=tmp_path))
+    second = json.loads(handle_next_task({
+        "workspace": str(tmp_path),
+        "worker_id": "codex-session-2",
+        "response_format": "json",
+    }, cwd=tmp_path))
+
+    assert first["status"] == "claimed"
+    assert second["status"] == "empty"
+    status = json.loads((tmp_path / "storage" / "task_status.json").read_text())
+    assert status["tasks"][0]["claimed_by"] == "codex-session-1"
 
 
 def test_next_task_reports_completion_guide_when_all_done(tmp_path: Path) -> None:
@@ -414,8 +442,10 @@ def test_finish_task_marks_done_without_external_agent(tmp_path: Path) -> None:
     payload = json.loads(result)
     assert payload["kind"] == "jibuff.in_session.finish"
     assert payload["status"] == "passed"
+    assert payload["task"]["status"] == "done"
     assert payload["all_done"] is True
     assert "All tasks are complete" in payload["next_guide"]
+    assert RuntimeStore.active(tmp_path) is None
 
     status = json.loads((tmp_path / "storage" / "task_status.json").read_text())
     assert status["tasks"][0]["status"] == "done"
@@ -440,12 +470,38 @@ def test_finish_task_requeues_on_validator_failure(tmp_path: Path) -> None:
 
     payload = json.loads(result)
     assert payload["status"] == "failed"
+    assert payload["task"]["status"] == "todo"
     assert payload["validator_errors"] == {"tests": "boom"}
     assert "requeued" in payload["next_guide"]
     assert (tmp_path / "storage" / "last_failure.md").exists()
 
     status = json.loads((tmp_path / "storage" / "task_status.json").read_text())
     assert status["tasks"][0]["status"] == "todo"
+
+
+def test_finish_task_rejects_stale_claim_before_validators(tmp_path: Path) -> None:
+    tasks = tmp_path / "spec" / "tasks.md"
+    tasks.parent.mkdir(parents=True)
+    tasks.write_text("- [ ] P0-01: test task\n", encoding="utf-8")
+    claimed = json.loads(handle_next_task({
+        "workspace": str(tmp_path),
+        "response_format": "json",
+    }, cwd=tmp_path))
+
+    with patch("jibuff_mcp.server._run_validator_stack") as validators:
+        result = handle_finish_task({
+            "workspace": str(tmp_path),
+            "task_id": "P0-01",
+            "claim_token": claimed["claim_token"] + "-stale",
+            "response_format": "json",
+        }, cwd=tmp_path)
+
+    validators.assert_not_called()
+    assert "stale runtime claim token" in result
+    assert not (tmp_path / "storage" / "last_failure.md").exists()
+
+    status = json.loads((tmp_path / "storage" / "task_status.json").read_text())
+    assert status["tasks"][0]["status"] == "in_progress"
 
 
 # ---------------------------------------------------------------------------

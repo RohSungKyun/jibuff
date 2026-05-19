@@ -1,8 +1,10 @@
-"""jibuff MCP server — exposes four tools for use inside Claude Code sessions.
+"""jibuff MCP server — exposes tools for use inside Claude Code sessions.
 
 Tools:
   jibuff_interview  Start or continue an interview session
   jibuff_run        Execute the loop for a given spec/task file
+  jibuff_next_task  Claim the next in-session task
+  jibuff_finish_task Validate and finish an in-session task
   jibuff_status     Query current loop state
   jibuff_cancel     Halt a running loop
 
@@ -491,8 +493,44 @@ def _queue_for_workspace(workspace: Path) -> object:
     )
 
 
+def _runtime_store_for_workspace(workspace: Path, queue: object, mode: str) -> object:
+    from orchestrator.runtime_store import RuntimeRunActiveError, RuntimeStore
+
+    active = RuntimeStore.active(workspace, running_only=True)
+    if active is not None:
+        return active
+
+    try:
+        return RuntimeStore.start(
+            workspace,
+            list(getattr(queue, "_tasks", [])),
+            mode=mode,
+            worker_count=1,
+        )
+    except RuntimeRunActiveError:
+        active = RuntimeStore.active(workspace, running_only=True)
+        if active is not None:
+            return active
+        raise
+
+
 def _find_task(queue: object, task_id: str) -> object | None:
-    return next((task for task in queue._tasks if task.id == task_id), None)
+    return next(
+        (
+            task
+            for task in getattr(queue, "_tasks", [])
+            if getattr(task, "id", "") == task_id
+        ),
+        None,
+    )
+
+
+def _claimable_tasks(queue: object) -> list[object]:
+    return [
+        task
+        for task in getattr(queue, "_tasks", [])
+        if getattr(task, "status", "") == "todo"
+    ]
 
 
 def _task_to_payload(task: object) -> dict[str, object]:
@@ -852,10 +890,38 @@ def handle_next_task(args: dict[str, object], cwd: Path) -> str:
 
     try:
         from reporters.progress import write_progress
+        from orchestrator.runtime_store import RuntimeClaimError
 
         queue = _queue_for_workspace(workspace)
-        task = queue.next()
         storage_dir = workspace / "storage"
+        claimable = _claimable_tasks(queue)
+        task = None
+        claim_token = ""
+
+        if claimable:
+            runtime_store = _runtime_store_for_workspace(workspace, queue, mode)
+        else:
+            runtime_store = None
+
+        for candidate in claimable:
+            try:
+                if runtime_store is None:  # pragma: no cover - defensive guard
+                    break
+                claim_token = runtime_store.claim_task(
+                    candidate,
+                    worker_id=worker_id,
+                    claim_token=f"{getattr(candidate, 'id', '')}:{uuid.uuid4().hex}",
+                    expected_revision=int(getattr(candidate, "revision", 0)),
+                )
+            except RuntimeClaimError:
+                continue
+            queue.mark_in_progress(
+                getattr(candidate, "id", ""),
+                claimed_by=worker_id,
+                claim_token=claim_token,
+            )
+            task = _find_task(queue, getattr(candidate, "id", "")) or candidate
+            break
 
         if task is None:
             payload = {
@@ -873,8 +939,6 @@ def handle_next_task(args: dict[str, object], cwd: Path) -> str:
                 f"next: {payload['next_guide']}"
             )
 
-        claim_token = queue.mark_in_progress(task.id, claimed_by=worker_id)
-        task = _find_task(queue, task.id) or task
         write_progress(queue, storage_dir)
         payload = {
             "kind": "jibuff.in_session.task",
@@ -924,6 +988,7 @@ def handle_finish_task(args: dict[str, object], cwd: Path) -> str:
 
     try:
         from orchestrator.task_queue import TaskClaimError
+        from orchestrator.runtime_store import RuntimeClaimError
         from reporters.failure_report import write_failure_report
         from reporters.progress import write_progress
 
@@ -933,6 +998,11 @@ def handle_finish_task(args: dict[str, object], cwd: Path) -> str:
             return f"Error: task not found: {task_id}"
 
         storage_dir = workspace / "storage"
+        runtime_store = _runtime_store_for_workspace(workspace, queue, mode)
+        worker_id = str(getattr(task, "claimed_by", "") or "jibuff-agent")
+        if not runtime_store.heartbeat(task_id, claim_token, worker_id=worker_id):
+            return f"Error: stale runtime claim token for task {task_id}"
+
         errors = _run_validator_stack(workspace, mode) if should_validate else {}
 
         if errors:
@@ -941,8 +1011,10 @@ def handle_finish_task(args: dict[str, object], cwd: Path) -> str:
                 validator_errors=errors,
                 storage_dir=storage_dir,
             )
+            runtime_store.requeue_task(task_id, claim_token, worker_id=worker_id)
             queue.requeue(task_id, claim_token=claim_token)
             write_progress(queue, storage_dir)
+            task = _find_task(queue, task_id) or task
             payload = {
                 "kind": "jibuff.in_session.finish",
                 "mode": mode,
@@ -960,9 +1032,13 @@ def handle_finish_task(args: dict[str, object], cwd: Path) -> str:
                 f"next: {payload['next_guide']}"
             )
 
+        runtime_store.complete_task(task_id, claim_token, worker_id=worker_id)
         queue.mark_done(task_id, claim_token=claim_token)
         write_progress(queue, storage_dir)
+        task = _find_task(queue, task_id) or task
         all_done = queue.all_done()
+        if all_done:
+            runtime_store.finish("all_done")
         guide_key = "passed_done" if all_done else "passed_more"
         payload = {
             "kind": "jibuff.in_session.finish",
@@ -980,6 +1056,8 @@ def handle_finish_task(args: dict[str, object], cwd: Path) -> str:
             f"summary: {queue.summary()}\n"
             f"next: {payload['next_guide']}"
         )
+    except RuntimeClaimError as e:
+        return f"Error: {e}"
     except TaskClaimError as e:
         return f"Error: {e}"
     except Exception as e:

@@ -744,6 +744,16 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
                 amb = session.last_ambiguity
                 amb_str = f"{amb.final_score:.2f}" if amb else "n/a"
                 state_path.unlink(missing_ok=True)
+
+                spec_dir = workspace / "spec"
+                spec_dir.mkdir(parents=True, exist_ok=True)
+                tasks_file = spec_dir / "tasks.md"
+                _atomic_write_text(tasks_file, tasks_md + "\n")
+
+                next_guide = (
+                    "spec/tasks.md written. "
+                    "Call jibuff_run with response_format=\"json\" to start the task loop."
+                )
                 if response_format == "json":
                     return _json_response({
                         "kind": "jibuff.interview.complete",
@@ -753,12 +763,16 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
                         "status": "complete",
                         "ambiguity_score": amb_str,
                         "tasks_md": tasks_md,
+                        "tasks_file": str(tasks_file),
+                        "next_guide": next_guide,
                     })
                 return (
                     f"[jibuff interview] mode={mode} | threshold={cfg.ambiguity_threshold}\n"
                     f"session_id: {session_id}\n"
-                    f"Interview complete. Ambiguity score: {amb_str}\n\n"
-                    f"Generated tasks:\n{tasks_md}"
+                    f"Interview complete. Ambiguity score: {amb_str}\n"
+                    f"tasks_file: {tasks_file}\n\n"
+                    f"Generated tasks:\n{tasks_md}\n\n"
+                    f"Next: {next_guide}"
                 )
 
             # Unit tests often patch InterviewEngine with MagicMock sessions; only

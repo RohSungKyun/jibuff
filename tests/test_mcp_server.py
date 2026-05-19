@@ -64,7 +64,7 @@ def _mock_engine(questions: list[str], complete: bool = False) -> MagicMock:
     session = MagicMock()
     session.complete = complete
     session.rounds = 1
-    session.last_ambiguity = MagicMock(score=0.1)
+    session.last_ambiguity = MagicMock(final_score=0.1)
     session.transcript = []
 
     engine = MagicMock()
@@ -319,6 +319,37 @@ def test_interview_rejects_unknown_response_format(tmp_path: Path) -> None:
     assert "'response_format'" in result
     assert "text" in result
     assert "json" in result
+
+
+def test_interview_complete_writes_tasks_file(tmp_path: Path) -> None:
+    engine = _mock_engine([], complete=True)
+    with patch("interview.engine.InterviewEngine", return_value=engine):
+        result = asyncio.run(handle_interview({
+            "request": "add login",
+            "workspace": str(tmp_path),
+        }))
+    tasks_file = tmp_path / "spec" / "tasks.md"
+    assert tasks_file.exists()
+    assert "P0-01" in tasks_file.read_text(encoding="utf-8")
+    assert "jibuff_run" in result
+    assert str(tasks_file) in result
+
+
+def test_interview_complete_json_includes_next_guide(tmp_path: Path) -> None:
+    engine = _mock_engine([], complete=True)
+    with patch("interview.engine.InterviewEngine", return_value=engine):
+        result = asyncio.run(handle_interview({
+            "request": "add login",
+            "workspace": str(tmp_path),
+            "response_format": "json",
+        }))
+    payload = json.loads(result)
+    assert payload["kind"] == "jibuff.interview.complete"
+    assert payload["status"] == "complete"
+    assert "tasks_file" in payload
+    assert "jibuff_run" in payload["next_guide"]
+    tasks_file = tmp_path / "spec" / "tasks.md"
+    assert tasks_file.exists()
 
 
 # ---------------------------------------------------------------------------

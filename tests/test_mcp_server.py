@@ -341,6 +341,18 @@ def test_run_dry_run_passes_with_tasks(tmp_path: Path) -> None:
     assert "dry_run=true" in result
 
 
+def test_run_dry_run_json(tmp_path: Path) -> None:
+    tasks = tmp_path / "spec" / "tasks.md"
+    tasks.parent.mkdir(parents=True)
+    tasks.write_text("- [ ] P0-01: test task\n", encoding="utf-8")
+    result = json.loads(handle_run(
+        {"workspace": str(tmp_path), "dry_run": True, "response_format": "json"},
+        cwd=tmp_path,
+    ))
+    assert result["kind"] == "jibuff.run.dry_run"
+    assert result["status"] == "ok"
+
+
 def test_run_unknown_mode(tmp_path: Path) -> None:
     result = handle_run({"mode": "phaser"}, cwd=tmp_path)
     assert "Error" in result
@@ -352,6 +364,41 @@ def test_run_uses_cwd_when_no_workspace(tmp_path: Path) -> None:
     tasks.write_text("- [ ] P0-01: test\n", encoding="utf-8")
     result = handle_run({"dry_run": True}, cwd=tmp_path)
     assert "Setup OK" in result
+
+
+def test_run_initializes_runtime_store(tmp_path: Path) -> None:
+    tasks = tmp_path / "spec" / "tasks.md"
+    tasks.parent.mkdir(parents=True)
+    tasks.write_text("- [ ] P0-01: test task\n", encoding="utf-8")
+    result = handle_run({"workspace": str(tmp_path), "response_format": "json"}, cwd=tmp_path)
+    payload = json.loads(result)
+    assert payload["kind"] == "jibuff.run.started"
+    assert payload["status"] == "started"
+    assert payload["run_id"] is not None
+    assert "jibuff_next_task" in payload["next_guide"]
+    runtime = RuntimeStore.active(tmp_path)
+    assert runtime is not None
+    assert runtime.run_id == payload["run_id"]
+
+
+def test_run_returns_all_done_when_tasks_complete(tmp_path: Path) -> None:
+    tasks = tmp_path / "spec" / "tasks.md"
+    tasks.parent.mkdir(parents=True)
+    tasks.write_text("- [x] P0-01: already done\n", encoding="utf-8")
+    result = json.loads(handle_run(
+        {"workspace": str(tmp_path), "response_format": "json"}, cwd=tmp_path
+    ))
+    assert result["status"] == "all_done"
+    assert result["run_id"] is None
+
+
+def test_run_text_includes_guide(tmp_path: Path) -> None:
+    tasks = tmp_path / "spec" / "tasks.md"
+    tasks.parent.mkdir(parents=True)
+    tasks.write_text("- [ ] P0-01: test task\n", encoding="utf-8")
+    result = handle_run({"workspace": str(tmp_path)}, cwd=tmp_path)
+    assert "jibuff_next_task" in result
+    assert "jibuff_finish_task" in result
 
 
 # ---------------------------------------------------------------------------

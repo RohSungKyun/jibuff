@@ -123,8 +123,9 @@ TOOLS: list[dict[str, object]] = [
     {
         "name": "jibuff_run",
         "description": (
-            "Execute the jibuff loop for a spec. "
-            "Picks up from the next incomplete task in tasks.md."
+            "Initialize an in-session jibuff run. Sets up RuntimeStore and returns "
+            "the task-loop guide so the current AI agent drives execution via "
+            "jibuff_next_task / jibuff_finish_task. Does not spawn an external agent."
         ),
         "inputSchema": {
             "type": "object",
@@ -141,8 +142,14 @@ TOOLS: list[dict[str, object]] = [
                 },
                 "dry_run": {
                     "type": "boolean",
-                    "description": "If true, validate setup only without executing agent",
+                    "description": "If true, validate setup only without starting the run",
                     "default": False,
+                },
+                "response_format": {
+                    "type": "string",
+                    "enum": ["text", "json"],
+                    "description": "Return human-readable text or JSON.",
+                    "default": "text",
                 },
             },
         },
@@ -803,10 +810,11 @@ async def handle_interview(args: dict[str, object], cwd: Path | None = None) -> 
 
 
 def handle_run(args: dict[str, object], cwd: Path) -> str:
-    """Execute the LoopController for the given workspace."""
+    """Initialize an in-session run and return the task-loop guide."""
     mode = str(args.get("mode", "quick"))
     workspace = Path(str(args["workspace"])) if "workspace" in args else cwd
     dry_run = bool(args.get("dry_run", False))
+    response_format = str(args.get("response_format", "text"))
 
     try:
         cfg = get_mode(mode)
@@ -818,6 +826,15 @@ def handle_run(args: dict[str, object], cwd: Path) -> str:
         return f"Error: tasks file not found at {tasks_file}"
 
     if dry_run:
+        if response_format == "json":
+            return _json_response({
+                "kind": "jibuff.run.dry_run",
+                "mode": mode,
+                "workspace": str(workspace),
+                "tasks_file": str(tasks_file),
+                "ambiguity_threshold": cfg.ambiguity_threshold,
+                "status": "ok",
+            })
         return (
             f"[jibuff run] dry_run=true | mode={mode}\n"
             f"workspace: {workspace}\n"
@@ -827,45 +844,45 @@ def handle_run(args: dict[str, object], cwd: Path) -> str:
         )
 
     try:
-        from orchestrator.agent_runner import AgentRunner
-        from orchestrator.loop_controller import LoopController
-        from orchestrator.task_queue import TaskQueue
-        from validators.lint import LintValidator
-        from validators.security import SecurityValidator
-        from validators.tests import PytestValidator
-        from validators.types import TypeValidator
+        from orchestrator.ops import INTERNAL_RUN_GUIDE
 
-        storage_dir = workspace / "storage"
-        storage_dir.mkdir(parents=True, exist_ok=True)
-        status_file = storage_dir / "task_status.json"
+        queue = _queue_for_workspace(workspace)
+        summary = queue.summary()
 
-        queue = TaskQueue(tasks_file=tasks_file, status_file=status_file)
-        runner = AgentRunner(workspace=workspace)
-        validators = [LintValidator(), TypeValidator(), PytestValidator(), SecurityValidator()]
+        if queue.all_done():
+            if response_format == "json":
+                return _json_response({
+                    "kind": "jibuff.run.started",
+                    "mode": mode,
+                    "workspace": str(workspace),
+                    "run_id": None,
+                    "summary": summary,
+                    "status": "all_done",
+                    "next_guide": "All tasks are already complete.",
+                })
+            return f"[jibuff run] All tasks already complete.\n{queue.summary()}"
 
-        if mode == "rtc":
-            from validators.device import DeviceValidator
-            from validators.fallback import FallbackValidator
-            from validators.firewall import FirewallValidator
-            from validators.network import NetworkValidator
-            validators += [
-                DeviceValidator(), NetworkValidator(), FallbackValidator(), FirewallValidator()
-            ]
+        runtime_store = _runtime_store_for_workspace(workspace, queue, mode)
 
-        controller = LoopController(
-            queue=queue,
-            runner=runner,
-            validators=validators,  # type: ignore[arg-type]
-            storage_dir=storage_dir,
-            workspace=workspace,
-        )
-        result = controller.run()
+        if response_format == "json":
+            return _json_response({
+                "kind": "jibuff.run.started",
+                "mode": mode,
+                "workspace": str(workspace),
+                "run_id": runtime_store.run_id,
+                "summary": summary,
+                "status": "started",
+                "next_guide": (
+                    "Call jibuff_next_task with response_format=\"json\" to claim "
+                    "your first task, then implement it and call jibuff_finish_task."
+                ),
+            })
 
         return (
-            f"[jibuff run] mode={mode} | {result.stopped_reason}\n"
-            f"completed : {len(result.completed_tasks)}\n"
-            f"failed    : {len(result.failed_tasks)}\n"
-            f"iterations: {result.total_iterations}"
+            f"[jibuff run] mode={mode} | run_id={runtime_store.run_id}\n"
+            f"todo={summary['todo']} done={summary['done']} "
+            f"blocked={summary.get('blocked', 0)}\n\n"
+            + INTERNAL_RUN_GUIDE
         )
 
     except Exception as e:

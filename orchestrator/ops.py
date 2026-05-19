@@ -30,32 +30,27 @@ validation-driven execution before handing work to an agent.
 
 - `jb interview "<request>"`: clarify requirements and write `spec/tasks.md`.
 - `jb interview "<request>" --mode rtc`: use stricter RTC/WebRTC clarification.
-- `jb run --internal`: execute the locked tasks inside the current AI agent session.
-- `jb run`: execute the locked tasks through the configured external agent CLI.
+- `jb run`: initialize the in-session task loop (returns guidance for next_task/finish_task).
+- `jb run --internal`: same as above, CLI-facing handoff guidance.
 - `jb status`: show current task counts.
 - `jb inspect`: inspect task state, failure artifacts, and MCP interview sessions.
 - `jb doctor`: verify local jibuff readiness.
 
 ## In-session agent loop
 
-Use this path when jibuff should run inside the current AI agent session rather
-than spawning an external `claude` or `codex` subprocess. This mirrors an
-OMX-style workflow while keeping state in `.jibuff`/`storage`.
+jibuff runs inside the current AI agent session — no external subprocess is
+spawned. This mirrors an OMX-style workflow while keeping state under
+`.jibuff/runs/<run_id>/` and `storage/`.
 
 1. Use `jibuff_interview` with `response_format="json"` until it returns
    generated tasks.
 2. Write or review `spec/tasks.md`.
-3. For `/jb run`, `$jb run`, or agent-hosted execution, call `jibuff_next_task`
-   to claim the next task for the current session.
-4. Implement only the claimed task directly in the current agent session.
-5. Call `jibuff_finish_task` with the returned `task_id` and `claim_token`.
-6. Follow the returned `next_guide`: claim the next task, fix a requeued task,
+3. Call `jibuff_run` to initialize the run and receive the task-loop guide.
+4. Call `jibuff_next_task` to claim the next task for the current session.
+5. Implement only the claimed task directly in the current agent session.
+6. Call `jibuff_finish_task` with the returned `task_id` and `claim_token`.
+7. Follow the returned `next_guide`: claim the next task, fix a requeued task,
    or summarize completion when all tasks are done.
-
-Do not call `jibuff_run` for in-session execution unless the user explicitly
-wants the external CLI orchestrator. `jibuff_run` intentionally uses the
-external agent CLI runner. The CLI command `jb run --internal` prints the same
-internal-loop handoff guidance for humans and agent hosts.
 
 ## MCP structured interviews
 
@@ -71,10 +66,9 @@ such as `{"value": "a"}`.
 
 1. Run `jb interview` when the request is ambiguous.
 2. Review `spec/tasks.md` before execution if scope is sensitive.
-3. In Codex/Claude sessions, run the loop internally with `jibuff_next_task`
-   and `jibuff_finish_task`; use `jb run --internal` as the matching CLI-facing
-   handoff command.
-4. Use `jb inspect` or `jb recover` if the session is interrupted.
+3. Call `jibuff_run` (MCP) or `jb run` (CLI) to start the in-session loop.
+4. Drive the loop with `jibuff_next_task` and `jibuff_finish_task`.
+5. Use `jb inspect` or `jb recover` if the session is interrupted.
 """
 
 
